@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "moveact-app",
+    "name": "Moveact",
     "slug": "moveact-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,14 +9,20 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#FAF7F5"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "net.moveact.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "商品画像の撮影に使用します",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "net.moveact.app",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#FAF7F5",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -25,6 +31,21 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#C4956A"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "06ac98a0-2e36-4879-bbfc-d3b85f8e78cf"
+      }
+    },
+    "owner": "moveact"
   }
 }

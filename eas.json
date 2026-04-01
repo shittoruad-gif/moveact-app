@@ -1,0 +1,30 @@
+{
+  "cli": {
+    "version": ">= 15.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": {
+        "simulator": true
+      }
+    },
+    "preview": {
+      "distribution": "internal"
+    },
+    "production": {
+      "autoIncrement": true
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "momen_t421@yahoo.co.jp",
+        "appleTeamId": "VLVG7F98ZK",
+        "ascAppId": "6761336366"
+      }
+    }
+  }
+}
