@@ -5,13 +5,18 @@ import { BookingStack } from './BookingStack';
 import { TicketStack } from './TicketStack';
 import { ShopStack } from './ShopStack';
 import { AccountStack } from './AccountStack';
+import { StaffStack } from './StaffStack';
 import { COLORS } from '../lib/constants';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuthStore } from '../stores/authStore';
 import type { MainTabParamList } from '../types/navigation';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 export function MainTabs() {
+  const profile = useAuthStore((s) => s.profile);
+  const isStaffOrAdmin = profile?.role === 'staff' || profile?.role === 'admin';
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -73,6 +78,18 @@ export function MainTabs() {
           ),
         }}
       />
+      {isStaffOrAdmin && (
+        <Tab.Screen
+          name="StaffTab"
+          component={StaffStack}
+          options={{
+            title: '管理',
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="grid-outline" size={22} color={color} />
+            ),
+          }}
+        />
+      )}
       <Tab.Screen
         name="AccountTab"
         component={AccountStack}

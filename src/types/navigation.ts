@@ -56,6 +56,17 @@ export type AccountStackParamList = {
   StoreSelect: undefined;
 };
 
+// Staff Stack
+export type StaffStackParamList = {
+  StaffDashboard: undefined;
+  CustomerList: undefined;
+  CustomerDetail: { userId: string };
+  StaffBookingList: undefined;
+  StaffBookingDetail: { bookingId: string };
+  StaffOrderList: undefined;
+  StaffRevenue: undefined;
+};
+
 // Main Tabs
 export type MainTabParamList = {
   HomeTab: undefined;
@@ -63,6 +74,7 @@ export type MainTabParamList = {
   TicketTab: undefined;
   ShopTab: undefined;
   AccountTab: undefined;
+  StaffTab: undefined;
 };
 
 // Root

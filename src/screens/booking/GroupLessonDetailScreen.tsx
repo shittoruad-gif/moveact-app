@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Alert, TouchableOpacity, Linking } from 'react-native';
 import { COLORS } from '../../lib/constants';
 import { Button } from '../../components/ui/Button';
 import { supabase } from '../../lib/supabase';
@@ -9,6 +9,9 @@ import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { BookingStackParamList } from '../../types/navigation';
 import type { GroupLesson } from '../../types/database';
+
+// 回数券購入リンク（後ほど正式URLに差し替え）
+const TICKET_PURCHASE_URL = '';
 
 type Props = NativeStackScreenProps<BookingStackParamList, 'GroupLessonDetail'>;
 
@@ -170,37 +173,58 @@ export function GroupLessonDetailScreen({ route, navigation }: Props) {
             <Text style={styles.sectionTitle}>予約方法を選択</Text>
 
             {/* Ticket option */}
-            {lesson.is_ticket_eligible && (
+            {lesson.is_ticket_eligible && eligibleTicket && (
               <TouchableOpacity
                 style={[
                   styles.paymentOption,
                   paymentMethod === 'ticket' && styles.paymentOptionSelected,
-                  !eligibleTicket && styles.paymentOptionDisabled,
                 ]}
-                onPress={() => eligibleTicket && setPaymentMethod('ticket')}
-                disabled={!eligibleTicket}
+                onPress={() => setPaymentMethod('ticket')}
               >
                 <View style={styles.paymentOptionLeft}>
                   <View style={[styles.radioCircle, paymentMethod === 'ticket' && styles.radioSelected]}>
                     {paymentMethod === 'ticket' && <View style={styles.radioDot} />}
                   </View>
                   <View>
-                    <Text style={[styles.paymentOptionTitle, !eligibleTicket && styles.disabledText]}>
+                    <Text style={styles.paymentOptionTitle}>
                       回数券で予約
                     </Text>
-                    {eligibleTicket ? (
-                      <Text style={styles.paymentOptionNote}>
-                        残り {eligibleTicket.remaining_sessions} 回 → {eligibleTicket.remaining_sessions - 1} 回
-                      </Text>
-                    ) : (
-                      <Text style={styles.paymentOptionNote}>対象の回数券をお持ちでありません</Text>
-                    )}
+                    <Text style={styles.paymentOptionNote}>
+                      残り {eligibleTicket.remaining_sessions} 回 → {eligibleTicket.remaining_sessions - 1} 回
+                    </Text>
                   </View>
                 </View>
-                <Text style={[styles.paymentOptionPrice, !eligibleTicket && styles.disabledText]}>
+                <Text style={styles.paymentOptionPrice}>
                   ¥0
                 </Text>
               </TouchableOpacity>
+            )}
+
+            {/* No ticket - show purchase link */}
+            {lesson.is_ticket_eligible && !eligibleTicket && (
+              <View style={styles.noTicketBox}>
+                <View style={styles.noTicketHeader}>
+                  <Ionicons name="ticket-outline" size={18} color={COLORS.textSecondary} />
+                  <Text style={styles.noTicketTitle}>回数券をお持ちでありません</Text>
+                </View>
+                <Text style={styles.noTicketNote}>
+                  回数券をご購入いただくとお得にレッスンをご予約いただけます。
+                </Text>
+                <TouchableOpacity
+                  style={styles.purchaseLink}
+                  onPress={() => {
+                    if (TICKET_PURCHASE_URL) {
+                      Linking.openURL(TICKET_PURCHASE_URL);
+                    } else {
+                      navigation.navigate('BookingChoice');
+                      Alert.alert('準備中', '回数券のオンライン購入は準備中です。\n店舗にてお買い求めください。');
+                    }
+                  }}
+                >
+                  <Text style={styles.purchaseLinkText}>回数券を購入する</Text>
+                  <Ionicons name="chevron-forward" size={16} color={COLORS.accent} />
+                </TouchableOpacity>
+              </View>
             )}
 
             {/* Direct payment option */}
@@ -403,5 +427,44 @@ const styles = StyleSheet.create({
   buttonSection: {
     paddingTop: 12,
     paddingBottom: 32,
+  },
+  noTicketBox: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+  },
+  noTicketHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  noTicketTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.textSecondary,
+  },
+  noTicketNote: {
+    fontSize: 12,
+    color: COLORS.textLight,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  purchaseLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: '#FDF5ED',
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  purchaseLinkText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.accent,
   },
 });
