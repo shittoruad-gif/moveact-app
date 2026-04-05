@@ -17,6 +17,9 @@ export function LoginScreen() {
   const [lastNameKana, setLastNameKana] = useState('');
   const [firstNameKana, setFirstNameKana] = useState('');
   const [phone, setPhone] = useState('');
+  const [birthYear, setBirthYear] = useState('');
+  const [birthMonth, setBirthMonth] = useState('');
+  const [birthDay, setBirthDay] = useState('');
   const [loading, setLoading] = useState(false);
   const { signInWithEmail, signUpWithEmail } = useAuth();
 
@@ -53,8 +56,14 @@ export function LoginScreen() {
     const fullName = `${lastName.trim()} ${firstName.trim()}`;
     const fullNameKana = `${lastNameKana.trim()} ${firstNameKana.trim()}`;
 
+    // Build date_of_birth string
+    let dateOfBirth = '';
+    if (birthYear && birthMonth && birthDay) {
+      dateOfBirth = `${birthYear}-${birthMonth.padStart(2, '0')}-${birthDay.padStart(2, '0')}`;
+    }
+
     setLoading(true);
-    const { error } = await signUpWithEmail(email.trim(), password, fullName, fullNameKana, phoneClean);
+    const { error } = await signUpWithEmail(email.trim(), password, fullName, fullNameKana, phoneClean, dateOfBirth);
     setLoading(false);
     if (error) {
       Alert.alert('エラー', error.message);
@@ -215,6 +224,38 @@ export function LoginScreen() {
               keyboardType="phone-pad"
               autoComplete="tel"
             />
+
+            <Text style={styles.fieldLabel}>生年月日</Text>
+            <View style={styles.row}>
+              <TextInput
+                style={[styles.input, { flex: 2 }]}
+                placeholder="1990"
+                placeholderTextColor={COLORS.textLight}
+                value={birthYear}
+                onChangeText={setBirthYear}
+                keyboardType="number-pad"
+                maxLength={4}
+              />
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="1"
+                placeholderTextColor={COLORS.textLight}
+                value={birthMonth}
+                onChangeText={setBirthMonth}
+                keyboardType="number-pad"
+                maxLength={2}
+              />
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="1"
+                placeholderTextColor={COLORS.textLight}
+                value={birthDay}
+                onChangeText={setBirthDay}
+                keyboardType="number-pad"
+                maxLength={2}
+              />
+            </View>
+            <Text style={styles.birthHint}>年 / 月 / 日（お誕生月にクーポンをお届けします）</Text>
 
             <Text style={styles.fieldLabel}>メールアドレス</Text>
             <TextInput
@@ -441,6 +482,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#27AE60',
     marginTop: -4,
+  },
+  birthHint: {
+    fontSize: 11,
+    color: COLORS.textLight,
+    marginTop: -4,
+    marginLeft: 4,
   },
   switchText: {
     textAlign: 'center',

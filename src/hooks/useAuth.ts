@@ -66,7 +66,7 @@ export function useAuth() {
     return { data, error };
   }
 
-  async function signUpWithEmail(email: string, password: string, fullName: string, fullNameKana?: string, phone?: string) {
+  async function signUpWithEmail(email: string, password: string, fullName: string, fullNameKana?: string, phone?: string, dateOfBirth?: string) {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -75,6 +75,7 @@ export function useAuth() {
           full_name: fullName,
           full_name_kana: fullNameKana || '',
           phone: phone || '',
+          date_of_birth: dateOfBirth || '',
         },
       },
     });

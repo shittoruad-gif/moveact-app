@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Image } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, STORES } from '../../lib/constants';
@@ -11,7 +11,7 @@ import { useGroupLessons } from '../../hooks/useGroupLessons';
 import { supabase } from '../../lib/supabase';
 import { ReviewRequestModal } from '../../components/ReviewRequestModal';
 import { useReviewRequest } from '../../hooks/useReviewRequest';
-import type { Announcement } from '../../types/database';
+import type { Announcement, Product } from '../../types/database';
 
 export function HomeScreen() {
   const navigation = useNavigation<any>();
@@ -21,13 +21,14 @@ export function HomeScreen() {
   const { totalRemainingSessions, refetch: refetchTickets } = useTickets();
   const { myBookings, refetch: refetchLessons } = useGroupLessons();
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [recommendedProducts, setRecommendedProducts] = useState<Product[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  const storeName = STORES[selectedStore].name;
   const firstName = profile?.full_name?.split(/\s/)[0] ?? '';
 
   useEffect(() => {
     fetchAnnouncements();
+    fetchRecommended();
   }, [selectedStore]);
 
   async function fetchAnnouncements() {
@@ -41,9 +42,19 @@ export function HomeScreen() {
     setAnnouncements((data as Announcement[]) ?? []);
   }
 
+  async function fetchRecommended() {
+    const { data } = await supabase
+      .from('products')
+      .select('*, images:product_images(*)')
+      .eq('is_active', true)
+      .order('created_at', { ascending: false })
+      .limit(8);
+    setRecommendedProducts((data as Product[]) ?? []);
+  }
+
   async function onRefresh() {
     setRefreshing(true);
-    await Promise.all([refetchTickets(), refetchLessons(), fetchAnnouncements()]);
+    await Promise.all([refetchTickets(), refetchLessons(), fetchAnnouncements(), fetchRecommended()]);
     setRefreshing(false);
   }
 
@@ -116,7 +127,7 @@ export function HomeScreen() {
       <View style={styles.quickActions}>
         <TouchableOpacity
           style={styles.quickAction}
-          onPress={() => navigation.navigate('BookingTab', { screen: 'BookingWebView', params: { storeId: selectedStore } })}
+          onPress={() => navigation.navigate('BookingTab', { screen: 'BookingCalendar', params: {} })}
         >
           <View style={[styles.quickIconWrap, { backgroundColor: '#F5EDE5' }]}>
             <Ionicons name="calendar-outline" size={22} color={COLORS.accent} />
@@ -155,6 +166,43 @@ export function HomeScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Recommended Products */}
+      {recommendedProducts.length > 0 && (
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>おすすめ商品</Text>
+            <TouchableOpacity onPress={() => navigation.navigate('ShopTab')}>
+              <Text style={styles.seeAllText}>すべて見る</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.productScroll}>
+            {recommendedProducts.map((p) => {
+              const imageUrl = p.images?.[0]?.image_url;
+              return (
+                <TouchableOpacity
+                  key={p.id}
+                  style={styles.productCard}
+                  onPress={() => navigation.navigate('ShopTab', {
+                    screen: 'ProductDetail',
+                    params: { productId: p.id },
+                  })}
+                >
+                  <View style={styles.productImageWrap}>
+                    {imageUrl ? (
+                      <Image source={{ uri: imageUrl }} style={styles.productImage} />
+                    ) : (
+                      <Ionicons name="image-outline" size={24} color={COLORS.borderLight} />
+                    )}
+                  </View>
+                  <Text style={styles.productName} numberOfLines={2}>{p.name}</Text>
+                  <Text style={styles.productPrice}>¥{p.price.toLocaleString()}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
+
       {/* Announcements */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>お知らせ</Text>
@@ -174,7 +222,6 @@ export function HomeScreen() {
 
       <View style={{ height: 32 }} />
 
-      {/* Review Request Modal */}
       <ReviewRequestModal
         visible={reviewRequest.visible}
         lessonTitle={reviewRequest.lessonTitle}
@@ -187,146 +234,58 @@ export function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  greetingSection: {
-    paddingHorizontal: 20,
-    paddingTop: 4,
-    paddingBottom: 20,
-  },
-  greeting: {
-    fontSize: 13,
-    color: COLORS.textSecondary,
-    letterSpacing: 0.5,
-  },
-  userName: {
-    fontSize: 22,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginTop: 2,
-    letterSpacing: 0.3,
-  },
+  container: { flex: 1, backgroundColor: COLORS.background },
+  greetingSection: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 20 },
+  greeting: { fontSize: 13, color: COLORS.textSecondary, letterSpacing: 0.5 },
+  userName: { fontSize: 22, fontWeight: '600', color: COLORS.text, marginTop: 2, letterSpacing: 0.3 },
   bookingCard: {
+    backgroundColor: COLORS.surface, marginHorizontal: 20, marginBottom: 12,
+    borderRadius: 16, flexDirection: 'row', overflow: 'hidden',
+  },
+  bookingCardAccent: { width: 4, backgroundColor: COLORS.accent },
+  bookingCardContent: { flex: 1, padding: 20 },
+  cardLabel: { fontSize: 11, fontWeight: '500', color: COLORS.textSecondary, letterSpacing: 1, marginBottom: 6 },
+  bookingTitle: { fontSize: 16, fontWeight: '600', color: COLORS.text, marginBottom: 8 },
+  bookingDateRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  bookingDate: { fontSize: 13, color: COLORS.textSecondary },
+  ticketCard: {
+    backgroundColor: COLORS.surface, marginHorizontal: 20, marginBottom: 20,
+    borderRadius: 16, padding: 20, flexDirection: 'row', alignItems: 'center',
+  },
+  ticketLeft: { flex: 1 },
+  ticketCountRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
+  ticketCount: { fontSize: 32, fontWeight: '300', color: COLORS.accent },
+  ticketUnit: { fontSize: 14, color: COLORS.textSecondary },
+  quickActions: { flexDirection: 'row', marginHorizontal: 20, marginBottom: 28, gap: 10 },
+  quickAction: { flex: 1, alignItems: 'center', gap: 8 },
+  quickIconWrap: { width: 52, height: 52, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  quickActionText: { fontSize: 11, fontWeight: '500', color: COLORS.textSecondary, letterSpacing: 0.3 },
+
+  /* Recommended products */
+  section: { paddingHorizontal: 20, marginBottom: 20 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  sectionTitle: { fontSize: 15, fontWeight: '600', color: COLORS.text, letterSpacing: 0.3 },
+  seeAllText: { fontSize: 12, color: COLORS.accent, fontWeight: '600' },
+  productScroll: { gap: 10, paddingRight: 4 },
+  productCard: {
+    width: 130,
     backgroundColor: COLORS.surface,
-    marginHorizontal: 20,
-    marginBottom: 12,
-    borderRadius: 16,
-    flexDirection: 'row',
+    borderRadius: 10,
     overflow: 'hidden',
   },
-  bookingCardAccent: {
-    width: 4,
-    backgroundColor: COLORS.accent,
-  },
-  bookingCardContent: {
-    flex: 1,
-    padding: 20,
-  },
-  cardLabel: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: COLORS.textSecondary,
-    letterSpacing: 1,
-    marginBottom: 6,
-  },
-  bookingTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: 8,
-  },
-  bookingDateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  bookingDate: {
-    fontSize: 13,
-    color: COLORS.textSecondary,
-  },
-  ticketCard: {
-    backgroundColor: COLORS.surface,
-    marginHorizontal: 20,
-    marginBottom: 20,
-    borderRadius: 16,
-    padding: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  ticketLeft: {
-    flex: 1,
-  },
-  ticketCountRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 4,
-  },
-  ticketCount: {
-    fontSize: 32,
-    fontWeight: '300',
-    color: COLORS.accent,
-  },
-  ticketUnit: {
-    fontSize: 14,
-    color: COLORS.textSecondary,
-  },
-  quickActions: {
-    flexDirection: 'row',
-    marginHorizontal: 20,
-    marginBottom: 28,
-    gap: 10,
-  },
-  quickAction: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 8,
-  },
-  quickIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
+  productImageWrap: {
+    width: '100%',
+    aspectRatio: 1,
+    backgroundColor: '#F8F6F4',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  quickActionText: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: COLORS.textSecondary,
-    letterSpacing: 0.3,
-  },
-  section: {
-    paddingHorizontal: 20,
-  },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: 12,
-    letterSpacing: 0.3,
-  },
-  emptyText: {
-    fontSize: 13,
-    color: COLORS.textLight,
-    textAlign: 'center',
-    paddingVertical: 24,
-  },
-  announcementItem: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 8,
-  },
-  announcementDate: {
-    fontSize: 11,
-    color: COLORS.textLight,
-    marginBottom: 4,
-  },
-  announcementTitle: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: COLORS.text,
-    lineHeight: 20,
-  },
+  productImage: { width: '100%', height: '100%', resizeMode: 'contain' },
+  productName: { fontSize: 11, fontWeight: '500', color: COLORS.text, padding: 8, paddingBottom: 2, lineHeight: 15 },
+  productPrice: { fontSize: 13, fontWeight: '700', color: COLORS.accent, paddingHorizontal: 8, paddingBottom: 8 },
+
+  emptyText: { fontSize: 13, color: COLORS.textLight, textAlign: 'center', paddingVertical: 24 },
+  announcementItem: { backgroundColor: COLORS.surface, borderRadius: 12, padding: 16, marginBottom: 8 },
+  announcementDate: { fontSize: 11, color: COLORS.textLight, marginBottom: 4 },
+  announcementTitle: { fontSize: 14, fontWeight: '500', color: COLORS.text, lineHeight: 20 },
 });

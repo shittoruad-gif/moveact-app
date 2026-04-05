@@ -17,6 +17,11 @@ export type HomeStackParamList = {
 export type BookingStackParamList = {
   BookingChoice: undefined;
   BookingWebView: { storeId: StoreId };
+  BookingCalendar: { menuId?: string; isNewCustomer?: boolean };
+  BookingConfirm: { menuId: string; dateTime: string; staffId?: string; isNewCustomer?: boolean };
+  BookingComplete: { bookingId: string; isNewCustomer?: boolean };
+  CounselingSheet: { bookingId: string };
+  StoreGuide: { storeId: StoreId };
   GroupLessonList: undefined;
   GroupLessonDetail: { lessonId: string };
   MenuPrice: undefined;
@@ -36,12 +41,17 @@ export type ShopStackParamList = {
   ProductDetail: { productId: string };
   Cart: undefined;
   Checkout: undefined;
+  OrderComplete: { orderId: string };
 };
 
 // Account Stack
 export type AccountStackParamList = {
   Account: undefined;
   OrderHistory: undefined;
+  Favorites: undefined;
+  BookingHistory: undefined;
+  CouponList: undefined;
+  ReferralScreen: undefined;
   NotificationSettings: undefined;
   StoreSelect: undefined;
 };

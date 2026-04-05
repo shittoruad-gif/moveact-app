@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../lib/constants';
 import { Button } from '../../components/ui/Button';
 import { useCartStore, CartItem } from '../../stores/cartStore';
@@ -42,7 +43,7 @@ export function CartScreen() {
   if (items.length === 0) {
     return (
       <View style={styles.emptyContainer}>
-        <Text style={styles.emptyIcon}>🛒</Text>
+        <Ionicons name="cart-outline" size={48} color={COLORS.textLight} />
         <Text style={styles.emptyTitle}>カートが空です</Text>
         <Button
           title="ショップへ戻る"

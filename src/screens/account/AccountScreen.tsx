@@ -19,7 +19,10 @@ export function AccountScreen() {
   }
 
   const menuItems = [
-    { label: '注文履歴', icon: 'bag-check-outline' as const, screen: 'OrderHistory' },
+    { label: '注文履歴', icon: 'receipt-outline' as const, screen: 'OrderHistory' },
+    { label: 'お気に入り', icon: 'heart-outline' as const, screen: 'Favorites' },
+    { label: 'クーポン', icon: 'ticket-outline' as const, screen: 'CouponList' },
+    { label: 'お友達紹介', icon: 'gift-outline' as const, screen: 'ReferralScreen' },
     { label: '通知設定', icon: 'notifications-outline' as const, screen: 'NotificationSettings' },
     { label: '店舗を切り替え', icon: 'storefront-outline' as const, screen: 'StoreSelect' },
   ];
@@ -35,12 +38,28 @@ export function AccountScreen() {
         </View>
         <View style={styles.profileInfo}>
           <Text style={styles.profileName}>{profile?.full_name ?? 'ゲスト'}</Text>
-          {profile?.phone ? (
-            <Text style={styles.profileDetail}>{profile.phone}</Text>
-          ) : null}
+          {profile?.phone && <Text style={styles.profileDetail}>{profile.phone}</Text>}
+          {profile?.date_of_birth && (
+            <Text style={styles.profileDetail}>
+              {new Date(profile.date_of_birth).toLocaleDateString('ja-JP', { month: 'long', day: 'numeric' })}生まれ
+            </Text>
+          )}
           <Text style={styles.profileStore}>{STORES[selectedStore].name}</Text>
         </View>
       </View>
+
+      {/* Referral CTA */}
+      <TouchableOpacity
+        style={styles.referralBanner}
+        onPress={() => navigation.navigate('ReferralScreen')}
+      >
+        <Ionicons name="gift" size={22} color={COLORS.accent} />
+        <View style={styles.referralText}>
+          <Text style={styles.referralTitle}>お知り合いを紹介する</Text>
+          <Text style={styles.referralDesc}>LINEで予約リンクを送れます</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={COLORS.textLight} />
+      </TouchableOpacity>
 
       {/* Menu */}
       <View style={styles.menu}>
@@ -62,7 +81,6 @@ export function AccountScreen() {
         <Text style={styles.signOutText}>ログアウト</Text>
       </TouchableOpacity>
 
-      {/* Version */}
       <Text style={styles.version}>Moveact App v1.0.0</Text>
     </ScrollView>
   );
@@ -73,80 +91,45 @@ const styles = StyleSheet.create({
   profileCard: {
     backgroundColor: COLORS.surface,
     margin: 20,
+    marginBottom: 12,
     borderRadius: 16,
     padding: 24,
     flexDirection: 'row',
     alignItems: 'center',
   },
   avatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 52, height: 52, borderRadius: 26,
     backgroundColor: COLORS.accentLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 16,
+    justifyContent: 'center', alignItems: 'center', marginRight: 16,
   },
-  avatarText: {
-    fontSize: 20,
-    fontWeight: '500',
-    color: COLORS.accent,
-  },
+  avatarText: { fontSize: 20, fontWeight: '500', color: COLORS.accent },
   profileInfo: { flex: 1 },
-  profileName: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: COLORS.text,
-    letterSpacing: 0.3,
-  },
-  profileDetail: {
-    fontSize: 13,
-    color: COLORS.textSecondary,
-    marginTop: 2,
-  },
-  profileStore: {
-    fontSize: 12,
-    color: COLORS.textLight,
-    marginTop: 4,
-  },
-  menu: {
+  profileName: { fontSize: 18, fontWeight: '600', color: COLORS.text },
+  profileDetail: { fontSize: 13, color: COLORS.textSecondary, marginTop: 2 },
+  profileStore: { fontSize: 12, color: COLORS.textLight, marginTop: 4 },
+  referralBanner: {
     backgroundColor: COLORS.surface,
     marginHorizontal: 20,
+    marginBottom: 16,
     borderRadius: 16,
-  },
-  menuItem: {
+    padding: 18,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 20,
     gap: 14,
-    borderBottomWidth: 0.5,
-    borderBottomColor: COLORS.borderLight,
+    borderWidth: 1.5,
+    borderColor: COLORS.accentLight,
   },
-  menuLabel: {
-    flex: 1,
-    fontSize: 15,
-    color: COLORS.text,
-    letterSpacing: 0.3,
+  referralText: { flex: 1 },
+  referralTitle: { fontSize: 15, fontWeight: '600', color: COLORS.text },
+  referralDesc: { fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
+  menu: { backgroundColor: COLORS.surface, marginHorizontal: 20, borderRadius: 16 },
+  menuItem: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 16, paddingHorizontal: 20, gap: 14,
+    borderBottomWidth: 0.5, borderBottomColor: COLORS.borderLight,
   },
-  signOutButton: {
-    marginTop: 32,
-    marginHorizontal: 20,
-    alignItems: 'center',
-    paddingVertical: 14,
-  },
-  signOutText: {
-    fontSize: 14,
-    color: COLORS.error,
-    fontWeight: '500',
-    letterSpacing: 0.3,
-  },
-  version: {
-    textAlign: 'center',
-    fontSize: 11,
-    color: COLORS.textLight,
-    marginTop: 16,
-    marginBottom: 32,
-    letterSpacing: 0.5,
-  },
+  menuLabel: { flex: 1, fontSize: 15, color: COLORS.text },
+  signOutButton: { marginTop: 32, marginHorizontal: 20, alignItems: 'center', paddingVertical: 14 },
+  signOutText: { fontSize: 14, color: COLORS.error, fontWeight: '500' },
+  version: { textAlign: 'center', fontSize: 11, color: COLORS.textLight, marginTop: 16, marginBottom: 32 },
 });

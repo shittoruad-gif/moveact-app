@@ -16,6 +16,7 @@ export interface Profile {
   full_name_kana: string | null;
   phone: string | null;
   email: string | null;
+  date_of_birth: string | null; // YYYY-MM-DD
   preferred_store: StoreId;
   role: UserRole;
   line_user_id: string | null;
@@ -241,6 +242,98 @@ export interface NotificationLog {
   data: Record<string, unknown> | null;
   is_read: boolean;
   sent_at: string;
+}
+
+// Booking (in-app reservation system)
+export type AppBookingStatus = 'confirmed' | 'completed' | 'cancelled' | 'no_show';
+
+export interface AppBooking {
+  id: string;
+  user_id: string;
+  store_id: StoreId;
+  treatment_menu_id: string;
+  staff_id: string | null;
+  starts_at: string;
+  ends_at: string;
+  buffer_before: number; // minutes
+  buffer_after: number;  // minutes
+  status: AppBookingStatus;
+  payment_method: 'prepaid' | 'onsite' | null;
+  prepayment_url: string | null;
+  stripe_payment_intent_id: string | null;
+  note: string | null;
+  created_by: 'client' | 'staff';
+  created_at: string;
+  updated_at: string;
+  // Joined
+  treatment_menu?: TreatmentMenu;
+  profile?: Profile;
+}
+
+// Staff schedule
+export interface StaffSchedule {
+  id: string;
+  staff_id: string;
+  store_id: StoreId;
+  date: string;
+  start_time: string; // HH:mm
+  end_time: string;
+  is_available: boolean;
+  created_at: string;
+}
+
+// Counseling sheet
+export type CounselingSheetStatus = 'pending' | 'completed';
+
+export interface CounselingSheet {
+  id: string;
+  user_id: string;
+  booking_id: string | null;
+  status: CounselingSheetStatus;
+  responses: Record<string, unknown>;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Favorites
+export interface Favorite {
+  id: string;
+  user_id: string;
+  product_id: string;
+  created_at: string;
+  // Joined
+  product?: Product;
+}
+
+// Coupons
+export type CouponType = 'birthday' | 'referral' | 'campaign';
+
+export interface Coupon {
+  id: string;
+  user_id: string;
+  code: string;
+  type: CouponType;
+  title: string;
+  description: string | null;
+  discount_amount: number | null;
+  discount_percent: number | null;
+  valid_from: string;
+  valid_until: string;
+  is_used: boolean;
+  used_at: string | null;
+  created_at: string;
+}
+
+// Referrals
+export interface Referral {
+  id: string;
+  referrer_user_id: string;
+  referred_name: string | null;
+  referred_phone: string | null;
+  status: 'sent' | 'registered' | 'completed';
+  referral_code: string;
+  created_at: string;
 }
 
 // Supabase Database type helper
