@@ -60,22 +60,39 @@ export function CouponListScreen() {
 
           <Text style={[styles.couponTitle, !isUsable && { color: COLORS.textLight }]}>{item.title}</Text>
 
-          {item.discount_amount && (
+          {item.discount_percent && item.discount_amount ? (
+            <Text style={[styles.discountText, !isUsable && { color: COLORS.textLight }]}>
+              {item.discount_percent}% OFF（上限¥{item.discount_amount.toLocaleString()}）
+            </Text>
+          ) : item.discount_amount ? (
             <Text style={[styles.discountText, !isUsable && { color: COLORS.textLight }]}>
               ¥{item.discount_amount.toLocaleString()} OFF
             </Text>
-          )}
-          {item.discount_percent && (
+          ) : item.discount_percent ? (
             <Text style={[styles.discountText, !isUsable && { color: COLORS.textLight }]}>
               {item.discount_percent}% OFF
             </Text>
-          )}
+          ) : null}
 
           {item.description && (
             <Text style={styles.couponDesc}>{item.description}</Text>
           )}
 
-          <Text style={styles.validUntil}>有効期限: {validUntil}まで</Text>
+          <View style={styles.couponFooter}>
+            {item.applicable_to && item.applicable_to !== 'all' && (
+              <View style={styles.scopeBadge}>
+                <Text style={styles.scopeBadgeText}>
+                  {item.applicable_to === 'treatment' ? '施術のみ' : '商品のみ'}
+                </Text>
+              </View>
+            )}
+            {item.applicable_to === 'all' && (
+              <View style={[styles.scopeBadge, styles.scopeBadgeAll]}>
+                <Text style={[styles.scopeBadgeText, styles.scopeBadgeAllText]}>施術・商品</Text>
+              </View>
+            )}
+            <Text style={styles.validUntil}>有効期限: {validUntil}まで</Text>
+          </View>
         </View>
       </View>
     );
@@ -122,7 +139,14 @@ const styles = StyleSheet.create({
   couponTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text },
   discountText: { fontSize: 20, fontWeight: '800', color: COLORS.accent },
   couponDesc: { fontSize: 12, color: COLORS.textSecondary, lineHeight: 18 },
-  validUntil: { fontSize: 11, color: COLORS.textLight, marginTop: 2 },
+  couponFooter: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
+  scopeBadge: {
+    backgroundColor: COLORS.accent + '15', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4,
+  },
+  scopeBadgeText: { fontSize: 10, fontWeight: '600', color: COLORS.accent },
+  scopeBadgeAll: { backgroundColor: COLORS.success + '15' },
+  scopeBadgeAllText: { color: COLORS.success },
+  validUntil: { fontSize: 11, color: COLORS.textLight },
   empty: { alignItems: 'center', paddingVertical: 60, gap: 8 },
   emptyText: { fontSize: 14, color: COLORS.textSecondary },
   emptySubtext: { fontSize: 12, color: COLORS.textLight },

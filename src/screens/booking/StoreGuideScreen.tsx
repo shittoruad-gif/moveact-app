@@ -9,7 +9,7 @@ type Props = NativeStackScreenProps<BookingStackParamList, 'StoreGuide'>;
 
 const STORE_DETAILS: Record<string, { description: string; parking: string; access: string; landmarks: string }> = {
   kanamitsu: {
-    description: '金光駅から徒歩圏内。2階にございますので、階段またはエレベーターをご利用ください。',
+    description: '金光駅から徒歩圏内。2階にございますので、階段をご利用ください。',
     parking: '建物前に専用駐車場あり（無料）',
     access: 'JR山陽本線「金光駅」より徒歩約10分',
     landmarks: '占見新田交差点近く',

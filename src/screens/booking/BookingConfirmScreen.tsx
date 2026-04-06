@@ -22,6 +22,8 @@ export function BookingConfirmScreen({ route, navigation }: Props) {
   const { selectedStore } = useStoreSelection();
   const { profile } = useAuthStore();
   const [menu, setMenu] = useState<TreatmentMenu | null>(null);
+  const [effectivePrice, setEffectivePrice] = useState<number | null>(null);
+  const [appliedTag, setAppliedTag] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const startTime = new Date(dateTime);
@@ -35,7 +37,26 @@ export function BookingConfirmScreen({ route, navigation }: Props) {
       .select('*')
       .eq('id', menuId)
       .single();
-    setMenu(data as TreatmentMenu);
+    const menuData = data as TreatmentMenu;
+    setMenu(menuData);
+
+    // Check tag-based pricing
+    if (profile?.tags && profile.tags.length > 0 && menuData) {
+      const { data: tpData } = await supabase
+        .from('menu_tag_prices')
+        .select('tag, price')
+        .eq('treatment_menu_id', menuId)
+        .in('tag', profile.tags)
+        .limit(1);
+      if (tpData && tpData.length > 0) {
+        setEffectivePrice(tpData[0].price);
+        setAppliedTag(tpData[0].tag);
+      } else {
+        setEffectivePrice(menuData.price);
+      }
+    } else if (menuData) {
+      setEffectivePrice(menuData.price);
+    }
   }
 
   async function handleConfirm() {
@@ -129,12 +150,22 @@ export function BookingConfirmScreen({ route, navigation }: Props) {
               <Text style={styles.rowValue}>{STORES[selectedStore].name}</Text>
             </View>
           </View>
-          {menu?.price != null && (
+          {effectivePrice != null && (
             <View style={[styles.row, { borderBottomWidth: 0 }]}>
               <Ionicons name="cash-outline" size={18} color={COLORS.textSecondary} />
               <View style={styles.rowContent}>
                 <Text style={styles.rowLabel}>料金</Text>
-                <Text style={styles.rowValueAccent}>¥{menu.price.toLocaleString()}</Text>
+                <View style={styles.priceRow}>
+                  <Text style={styles.rowValueAccent}>¥{effectivePrice.toLocaleString()}</Text>
+                  {appliedTag && (
+                    <View style={styles.priceTagBadge}>
+                      <Text style={styles.priceTagBadgeText}>{appliedTag}</Text>
+                    </View>
+                  )}
+                </View>
+                {appliedTag && menu && effectivePrice !== menu.price && (
+                  <Text style={styles.originalPriceText}>通常料金: ¥{menu.price.toLocaleString()}</Text>
+                )}
               </View>
             </View>
           )}
@@ -161,17 +192,15 @@ export function BookingConfirmScreen({ route, navigation }: Props) {
           <Text style={styles.noteTitle}>ご予約に関して</Text>
           {isNewCustomer ? (
             <Text style={styles.noteText}>
-              ・ご予約時間の10分前までにお越しください（初回はカウンセリングがございます）{'\n'}
+              ・予約時間の5分前を目安にお越しください（初回はカウンセリングがございます）{'\n'}
               ・動きやすい服装でお越しいただくとスムーズです{'\n'}
               ・カウンセリングシートは予約後にアプリ内でご記入いただけます{'\n'}
-              ・予約時間の前後{BUFFER_MINUTES}分は入替時間として確保されます{'\n'}
-              ・キャンセルはお早めにお願いいたします
+              ・当日キャンセルの場合、施術料金の100%のキャンセル料が発生いたします
             </Text>
           ) : (
             <Text style={styles.noteText}>
-              ・ご予約時間の5分前までにお越しください{'\n'}
-              ・予約時間の前後{BUFFER_MINUTES}分は入替時間として確保されます{'\n'}
-              ・キャンセルはお早めにお願いいたします
+              ・予約時間の5分前を目安にお越しください{'\n'}
+              ・当日キャンセルの場合、施術料金の100%のキャンセル料が発生いたします
             </Text>
           )}
         </View>
@@ -236,6 +265,12 @@ const styles = StyleSheet.create({
   rowValue: { fontSize: 15, fontWeight: '600', color: COLORS.text },
   rowSubvalue: { fontSize: 13, color: COLORS.textSecondary, marginTop: 2 },
   rowValueAccent: { fontSize: 18, fontWeight: '700', color: COLORS.accent },
+  priceRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  priceTagBadge: {
+    backgroundColor: COLORS.accentPink + '25', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6,
+  },
+  priceTagBadgeText: { fontSize: 10, fontWeight: '700', color: COLORS.accentPink },
+  originalPriceText: { fontSize: 11, color: COLORS.textLight, textDecorationLine: 'line-through', marginTop: 2 },
   prepayCard: {
     backgroundColor: '#FFF8F0',
     borderRadius: 14,

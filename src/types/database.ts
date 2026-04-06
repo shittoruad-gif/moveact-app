@@ -309,6 +309,8 @@ export interface Favorite {
 // Coupons
 export type CouponType = 'birthday' | 'referral' | 'campaign';
 
+export type CouponApplicableTo = 'treatment' | 'shop' | 'all';
+
 export interface Coupon {
   id: string;
   user_id: string;
@@ -318,6 +320,7 @@ export interface Coupon {
   description: string | null;
   discount_amount: number | null;
   discount_percent: number | null;
+  applicable_to: CouponApplicableTo;
   valid_from: string;
   valid_until: string;
   is_used: boolean;

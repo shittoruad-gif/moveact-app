@@ -6,6 +6,7 @@ import { CustomerDetailScreen } from '../screens/staff/CustomerDetailScreen';
 import { StaffBookingListScreen } from '../screens/staff/StaffBookingListScreen';
 import { StaffOrderListScreen } from '../screens/staff/StaffOrderListScreen';
 import { StaffRevenueScreen } from '../screens/staff/StaffRevenueScreen';
+import { CouponManagementScreen } from '../screens/staff/CouponManagementScreen';
 import { COLORS } from '../lib/constants';
 import type { StaffStackParamList } from '../types/navigation';
 
@@ -50,6 +51,11 @@ export function StaffStack() {
         name="StaffRevenue"
         component={StaffRevenueScreen}
         options={{ title: '売上・明細' }}
+      />
+      <Stack.Screen
+        name="CouponManagement"
+        component={CouponManagementScreen}
+        options={{ title: 'クーポン管理' }}
       />
     </Stack.Navigator>
   );

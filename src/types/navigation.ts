@@ -65,6 +65,7 @@ export type StaffStackParamList = {
   StaffBookingDetail: { bookingId: string };
   StaffOrderList: undefined;
   StaffRevenue: undefined;
+  CouponManagement: undefined;
 };
 
 // Main Tabs

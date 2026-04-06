@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../lib/constants';
 import { useStoreSelection } from '../../stores/storeSelectionStore';
+import { useAuthStore } from '../../stores/authStore';
 import { supabase } from '../../lib/supabase';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { BookingStackParamList } from '../../types/navigation';
@@ -17,12 +18,20 @@ const TIME_SLOTS = Array.from({ length: 20 }, (_, i) => {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 });
 
+interface TagPrice {
+  menuId: string;
+  price: number;
+  tag: string | null;
+}
+
 export function BookingCalendarScreen({ route, navigation }: Props) {
   const { selectedStore } = useStoreSelection();
+  const { profile } = useAuthStore();
   const [menus, setMenus] = useState<TreatmentMenu[]>([]);
   const [selectedMenu, setSelectedMenu] = useState<string>(route.params?.menuId ?? '');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [existingBookings, setExistingBookings] = useState<AppBooking[]>([]);
+  const [tagPrices, setTagPrices] = useState<Map<string, TagPrice>>(new Map());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => { fetchMenus(); }, []);
@@ -34,10 +43,34 @@ export function BookingCalendarScreen({ route, navigation }: Props) {
       .select('*')
       .eq('is_active', true)
       .order('sort_order');
-    setMenus((data as TreatmentMenu[]) ?? []);
-    if (!selectedMenu && data && data.length > 0) {
-      setSelectedMenu(data[0].id);
+    const menuList = (data as TreatmentMenu[]) ?? [];
+    setMenus(menuList);
+    if (!selectedMenu && menuList.length > 0) {
+      setSelectedMenu(menuList[0].id);
     }
+
+    // Fetch tag-based prices for this user
+    if (profile?.tags && profile.tags.length > 0) {
+      const { data: tpData } = await supabase
+        .from('menu_tag_prices')
+        .select('treatment_menu_id, tag, price')
+        .in('tag', profile.tags);
+      if (tpData && tpData.length > 0) {
+        const priceMap = new Map<string, TagPrice>();
+        for (const menu of menuList) {
+          // Find the first matching tag price for this menu (tag order matters)
+          for (const userTag of profile.tags) {
+            const match = tpData.find((tp: any) => tp.treatment_menu_id === menu.id && tp.tag === userTag);
+            if (match) {
+              priceMap.set(menu.id, { menuId: menu.id, price: match.price, tag: match.tag });
+              break;
+            }
+          }
+        }
+        setTagPrices(priceMap);
+      }
+    }
+
     setLoading(false);
   }
 
@@ -125,20 +158,38 @@ export function BookingCalendarScreen({ route, navigation }: Props) {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>メニューを選択</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.menuScroll}>
-          {menus.map((menu) => (
-            <TouchableOpacity
-              key={menu.id}
-              style={[styles.menuChip, selectedMenu === menu.id && styles.menuChipSelected]}
-              onPress={() => setSelectedMenu(menu.id)}
-            >
-              <Text style={[styles.menuChipText, selectedMenu === menu.id && styles.menuChipTextSelected]}>
-                {menu.name}
-              </Text>
-              <Text style={[styles.menuDuration, selectedMenu === menu.id && styles.menuDurationSelected]}>
-                {menu.duration_minutes}分
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {menus.map((menu) => {
+            const tp = tagPrices.get(menu.id);
+            const effectivePrice = tp ? tp.price : menu.price;
+            const isSelected = selectedMenu === menu.id;
+            return (
+              <TouchableOpacity
+                key={menu.id}
+                style={[styles.menuChip, isSelected && styles.menuChipSelected]}
+                onPress={() => setSelectedMenu(menu.id)}
+              >
+                {tp && (
+                  <View style={[styles.tagBadge, isSelected && styles.tagBadgeSelected]}>
+                    <Text style={[styles.tagBadgeText, isSelected && styles.tagBadgeTextSelected]}>{tp.tag}</Text>
+                  </View>
+                )}
+                <Text style={[styles.menuChipText, isSelected && styles.menuChipTextSelected]}>
+                  {menu.name}
+                </Text>
+                <Text style={[styles.menuDuration, isSelected && styles.menuDurationSelected]}>
+                  {menu.duration_minutes}分
+                </Text>
+                <Text style={[styles.menuPrice, isSelected && styles.menuPriceSelected]}>
+                  ¥{effectivePrice.toLocaleString()}
+                </Text>
+                {tp && (
+                  <Text style={[styles.menuOriginalPrice, isSelected && styles.menuOriginalPriceSelected]}>
+                    (通常 ¥{menu.price.toLocaleString()})
+                  </Text>
+                )}
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       </View>
 
@@ -173,22 +224,33 @@ export function BookingCalendarScreen({ route, navigation }: Props) {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
           時間を選択
-          {currentMenu && (
-            <Text style={styles.bufferNote}> (前後{BUFFER_MINUTES}分は入替時間として確保)</Text>
-          )}
         </Text>
+        {/* Legend */}
+        <View style={styles.slotLegend}>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: COLORS.success }]} />
+            <Text style={styles.legendText}>空き</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: COLORS.textLight }]} />
+            <Text style={styles.legendText}>予約済</Text>
+          </View>
+        </View>
         <View style={styles.slotsGrid}>
           {TIME_SLOTS.map((slot) => {
             const available = isSlotAvailable(slot);
             return (
               <TouchableOpacity
                 key={slot}
-                style={[styles.slotButton, !available && styles.slotUnavailable]}
+                style={[styles.slotButton, available ? styles.slotAvailable : styles.slotUnavailable]}
                 disabled={!available}
                 onPress={() => handleSelectSlot(slot)}
               >
-                <Text style={[styles.slotText, !available && styles.slotTextUnavailable]}>
+                <Text style={[styles.slotText, available ? styles.slotTextAvailable : styles.slotTextUnavailable]}>
                   {slot}
+                </Text>
+                <Text style={[styles.slotStatus, available ? styles.slotStatusAvailable : styles.slotStatusUnavailable]}>
+                  {available ? '空き' : '---'}
                 </Text>
               </TouchableOpacity>
             );
@@ -226,6 +288,17 @@ const styles = StyleSheet.create({
   menuChipTextSelected: { color: '#FFF' },
   menuDuration: { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
   menuDurationSelected: { color: 'rgba(255,255,255,0.8)' },
+  menuPrice: { fontSize: 13, fontWeight: '700', color: COLORS.accent, marginTop: 4 },
+  menuPriceSelected: { color: '#FFF' },
+  menuOriginalPrice: { fontSize: 10, color: COLORS.textLight, textDecorationLine: 'line-through', marginTop: 1 },
+  menuOriginalPriceSelected: { color: 'rgba(255,255,255,0.6)' },
+  tagBadge: {
+    backgroundColor: COLORS.accentPink + '30', paddingHorizontal: 8, paddingVertical: 2,
+    borderRadius: 6, marginBottom: 4,
+  },
+  tagBadgeSelected: { backgroundColor: 'rgba(255,255,255,0.25)' },
+  tagBadgeText: { fontSize: 9, fontWeight: '700', color: COLORS.accentPink },
+  tagBadgeTextSelected: { color: '#FFF' },
   dateScroll: { gap: 8, paddingBottom: 4 },
   dateChip: {
     width: 52,
@@ -252,19 +325,32 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
   },
+  slotLegend: {
+    flexDirection: 'row', gap: 16, marginBottom: 10,
+  },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendText: { fontSize: 11, color: COLORS.textSecondary },
   slotButton: {
     width: '23%',
-    paddingVertical: 14,
+    paddingVertical: 10,
     borderRadius: 10,
-    backgroundColor: COLORS.surface,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    borderWidth: 1.5,
+    gap: 2,
+  },
+  slotAvailable: {
+    backgroundColor: COLORS.surface,
+    borderColor: COLORS.success,
   },
   slotUnavailable: {
     backgroundColor: COLORS.backgroundSoft,
     borderColor: COLORS.borderLight,
   },
-  slotText: { fontSize: 14, fontWeight: '600', color: COLORS.text },
+  slotText: { fontSize: 14, fontWeight: '600' },
+  slotTextAvailable: { color: COLORS.text },
   slotTextUnavailable: { color: COLORS.textLight },
+  slotStatus: { fontSize: 9, fontWeight: '600' },
+  slotStatusAvailable: { color: COLORS.success },
+  slotStatusUnavailable: { color: COLORS.textLight },
 });

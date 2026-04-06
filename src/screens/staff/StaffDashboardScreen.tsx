@@ -107,6 +107,10 @@ export function StaffDashboardScreen() {
           <Ionicons name="cash-outline" size={20} color={COLORS.accent} />
           <Text style={styles.quickActionText}>売上・明細</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={styles.quickAction} onPress={() => navigation.navigate('CouponManagement')}>
+          <Ionicons name="ticket-outline" size={20} color={COLORS.accent} />
+          <Text style={styles.quickActionText}>クーポン管理</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Today's bookings list */}

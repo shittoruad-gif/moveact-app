@@ -13,8 +13,9 @@ CREATE TABLE IF NOT EXISTS coupons (
   type TEXT NOT NULL CHECK (type IN ('birthday', 'referral', 'campaign')),
   title TEXT NOT NULL,
   description TEXT,
-  discount_amount INTEGER,   -- yen discount
+  discount_amount INTEGER,   -- yen discount (also used as cap when both set)
   discount_percent INTEGER,  -- % discount
+  applicable_to TEXT NOT NULL DEFAULT 'all' CHECK (applicable_to IN ('treatment', 'shop', 'all')),  -- where coupon can be used
   valid_from TIMESTAMPTZ NOT NULL DEFAULT now(),
   valid_until TIMESTAMPTZ NOT NULL,
   is_used BOOLEAN NOT NULL DEFAULT false,
@@ -80,14 +81,16 @@ BEGIN
   LOOP
     INSERT INTO coupons (
       user_id, code, type, title, description,
-      discount_percent, valid_from, valid_until
+      discount_percent, discount_amount, applicable_to, valid_from, valid_until
     ) VALUES (
       r.id,
       'BDAY-' || TO_CHAR(CURRENT_DATE, 'YYYYMM') || '-' || SUBSTRING(r.id::TEXT FROM 1 FOR 8),
       'birthday',
       r.full_name || 'さん、お誕生日おめでとうございます',
-      'お誕生月の特別クーポンです。施術料金からお値引きいたします。',
-      10,
+      'お誕生月の特別クーポンです。施術・商品購入から20%OFF（上限1,000円）となります。',
+      20,
+      1000,
+      'all',
       coupon_valid_from,
       coupon_valid_until
     );

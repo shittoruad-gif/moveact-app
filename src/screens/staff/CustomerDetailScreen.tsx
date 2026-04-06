@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Linking, Alert, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../lib/constants';
 import { supabase } from '../../lib/supabase';
@@ -89,6 +89,9 @@ export function CustomerDetailScreen({ route }: Props) {
           <InfoRow label="来店回数" value={`${totalVisits}回`} last />
         </View>
       </View>
+
+      {/* Tags */}
+      <TagSection userId={userId} tags={profile.tags ?? []} onUpdate={fetchAll} />
 
       {/* Counseling sheet / Karte */}
       <View style={styles.section}>
@@ -191,6 +194,108 @@ function InfoRow({ label, value, last }: { label: string; value: string; last?: 
     </View>
   );
 }
+
+const PRESET_TAGS = ['VIP', '旧料金', '回数券優待', 'スタッフ', '紹介済'];
+
+function TagSection({ userId, tags, onUpdate }: { userId: string; tags: string[]; onUpdate: () => void }) {
+  const [newTag, setNewTag] = useState('');
+
+  async function addTag(tag: string) {
+    const trimmed = tag.trim();
+    if (!trimmed || tags.includes(trimmed)) return;
+    const updated = [...tags, trimmed];
+    const { error } = await supabase.from('profiles').update({ tags: updated }).eq('id', userId);
+    if (error) { Alert.alert('エラー', 'タグの追加に失敗しました'); return; }
+    setNewTag('');
+    onUpdate();
+  }
+
+  async function removeTag(tag: string) {
+    const updated = tags.filter((t) => t !== tag);
+    const { error } = await supabase.from('profiles').update({ tags: updated }).eq('id', userId);
+    if (error) { Alert.alert('エラー', 'タグの削除に失敗しました'); return; }
+    onUpdate();
+  }
+
+  return (
+    <View style={tagStyles.section}>
+      <Text style={styles.sectionTitle}>タグ</Text>
+      <View style={tagStyles.card}>
+        {/* Current tags */}
+        <View style={tagStyles.tagList}>
+          {tags.length === 0 && <Text style={tagStyles.emptyText}>タグなし</Text>}
+          {tags.map((tag) => (
+            <View key={tag} style={tagStyles.tag}>
+              <Text style={tagStyles.tagText}>{tag}</Text>
+              <TouchableOpacity onPress={() => removeTag(tag)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close-circle" size={16} color={COLORS.textLight} />
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+
+        {/* Preset tags */}
+        <View style={tagStyles.presetRow}>
+          {PRESET_TAGS.filter((t) => !tags.includes(t)).map((tag) => (
+            <TouchableOpacity key={tag} style={tagStyles.presetChip} onPress={() => addTag(tag)}>
+              <Ionicons name="add" size={12} color={COLORS.accent} />
+              <Text style={tagStyles.presetText}>{tag}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Custom tag input */}
+        <View style={tagStyles.inputRow}>
+          <TextInput
+            style={tagStyles.input}
+            placeholder="カスタムタグを追加"
+            placeholderTextColor={COLORS.textLight}
+            value={newTag}
+            onChangeText={setNewTag}
+            onSubmitEditing={() => addTag(newTag)}
+            returnKeyType="done"
+          />
+          <TouchableOpacity
+            style={[tagStyles.addBtn, !newTag.trim() && { opacity: 0.4 }]}
+            onPress={() => addTag(newTag)}
+            disabled={!newTag.trim()}
+          >
+            <Text style={tagStyles.addBtnText}>追加</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const tagStyles = StyleSheet.create({
+  section: { paddingHorizontal: 20, marginTop: 20 },
+  card: { backgroundColor: COLORS.surface, borderRadius: 14, padding: 16, gap: 12 },
+  tagList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  emptyText: { fontSize: 13, color: COLORS.textLight },
+  tag: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: COLORS.accentPink + '20', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16,
+  },
+  tagText: { fontSize: 13, fontWeight: '600', color: COLORS.accentPink },
+  presetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  presetChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: COLORS.backgroundSoft, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14,
+    borderWidth: 1, borderColor: COLORS.borderLight, borderStyle: 'dashed',
+  },
+  presetText: { fontSize: 11, color: COLORS.accent, fontWeight: '500' },
+  inputRow: { flexDirection: 'row', gap: 8 },
+  input: {
+    flex: 1, backgroundColor: COLORS.backgroundSoft, borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, color: COLORS.text,
+  },
+  addBtn: {
+    backgroundColor: COLORS.accent, paddingHorizontal: 16, borderRadius: 10,
+    justifyContent: 'center',
+  },
+  addBtnText: { fontSize: 13, fontWeight: '600', color: '#FFF' },
+});
 
 const RESPONSE_LABELS: Record<string, string> = {
   chief_complaint: '現在のお悩み・症状',
