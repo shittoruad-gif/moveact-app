@@ -13,8 +13,8 @@ export function TicketDashboardScreen() {
   const { tickets, isLoading, refetch } = useTickets();
 
   function renderTicket({ item }: { item: UserTicket }) {
-    const treatmentName = item.ticket_plan
-      ? TREATMENT_TYPES[item.ticket_plan.treatment_type] ?? item.ticket_plan.treatment_type
+    const treatmentName = item.ticket_plan?.treatment_type
+      ? (TREATMENT_TYPES[item.ticket_plan.treatment_type as keyof typeof TREATMENT_TYPES] ?? item.ticket_plan.treatment_type)
       : '';
     const expiresDate = new Date(item.expires_at);
     const daysLeft = Math.ceil((expiresDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
