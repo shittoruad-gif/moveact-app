@@ -1,10 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { View, Text, StyleSheet, Platform } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { useAuth } from './src/hooks/useAuth';
 import { useStoreSelection } from './src/stores/storeSelectionStore';
+import { usePushNotifications } from './src/hooks/usePushNotifications';
+import * as Notifications from 'expo-notifications';
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -30,9 +32,23 @@ class ErrorBoundary extends React.Component<
 function AppContent() {
   const { isLoading } = useAuth();
   const { loadFromStorage } = useStoreSelection();
+  const { expoPushToken } = usePushNotifications();
+  const navigationRef = useRef<NavigationContainerRef<any>>(null);
 
   useEffect(() => {
     loadFromStorage();
+  }, []);
+
+  // Handle notification tap navigation
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data;
+      if (data?.screen && navigationRef.current) {
+        // Navigate to the screen specified in the notification
+        navigationRef.current.navigate(data.screen as string, data.params as any);
+      }
+    });
+    return () => subscription.remove();
   }, []);
 
   // Web linking config for react-navigation
@@ -55,7 +71,7 @@ function AppContent() {
   } as const : undefined;
 
   return (
-    <NavigationContainer linking={linking as any}>
+    <NavigationContainer ref={navigationRef} linking={linking as any}>
       <StatusBar style="light" />
       <RootNavigator />
     </NavigationContainer>
