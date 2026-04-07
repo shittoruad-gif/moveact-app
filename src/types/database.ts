@@ -23,6 +23,7 @@ export interface Profile {
   expo_push_token: string | null;
   stripe_customer_id: string | null;
   review_opt_out: boolean;
+  interests: string[];
   tags: string[];
   created_at: string;
   updated_at: string;

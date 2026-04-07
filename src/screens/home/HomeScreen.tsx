@@ -11,6 +11,7 @@ import { useGroupLessons } from '../../hooks/useGroupLessons';
 import { supabase } from '../../lib/supabase';
 import { ReviewRequestModal } from '../../components/ReviewRequestModal';
 import { useReviewRequest } from '../../hooks/useReviewRequest';
+import { buildInterestFilter } from '../../lib/interests';
 import type { Announcement, Product } from '../../types/database';
 
 export function HomeScreen() {
@@ -29,7 +30,7 @@ export function HomeScreen() {
   useEffect(() => {
     fetchAnnouncements();
     fetchRecommended();
-  }, [selectedStore]);
+  }, [selectedStore, profile?.interests]);
 
   async function fetchAnnouncements() {
     const { data } = await supabase
@@ -43,6 +44,36 @@ export function HomeScreen() {
   }
 
   async function fetchRecommended() {
+    const interests = profile?.interests ?? [];
+    const hasInterests = interests.length > 0 && !interests.includes('_skipped');
+
+    if (hasInterests) {
+      // Filter by user interests: match category or keyword in product name
+      const filter = buildInterestFilter(interests);
+      const categoryFilter = filter.categories.map((c) => `category.eq.${c}`).join(',');
+
+      const { data } = await supabase
+        .from('products')
+        .select('*, images:product_images(*)')
+        .eq('is_active', true)
+        .or(categoryFilter)
+        .order('created_at', { ascending: false })
+        .limit(12);
+
+      if (data && data.length > 0) {
+        // Further filter by keywords for better relevance, but keep category matches as fallback
+        const keywordSet = filter.keywords;
+        const scored = (data as Product[]).map((p) => {
+          const nameMatch = keywordSet.filter((k) => p.name.includes(k)).length;
+          return { product: p, score: nameMatch };
+        });
+        scored.sort((a, b) => b.score - a.score);
+        setRecommendedProducts(scored.slice(0, 8).map((s) => s.product));
+        return;
+      }
+    }
+
+    // Fallback: latest products
     const { data } = await supabase
       .from('products')
       .select('*, images:product_images(*)')

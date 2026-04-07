@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ActivityIndicator, View } from 'react-native';
 import { AuthStack } from './AuthStack';
 import { MainTabs } from './MainTabs';
+import { OnboardingInterestsScreen } from '../screens/auth/OnboardingInterestsScreen';
 import { useAuthStore } from '../stores/authStore';
 import { COLORS } from '../lib/constants';
 import type { RootStackParamList } from '../types/navigation';
@@ -13,7 +14,7 @@ const PREVIEW_MODE = false;
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export function RootNavigator() {
-  const { session, isLoading } = useAuthStore();
+  const { session, profile, isLoading } = useAuthStore();
 
   if (isLoading) {
     return (
@@ -23,14 +24,17 @@ export function RootNavigator() {
     );
   }
 
-  const showMain = PREVIEW_MODE || !!session;
+  const isAuthenticated = PREVIEW_MODE || !!session;
+  const needsOnboarding = isAuthenticated && profile && (!profile.interests || profile.interests.length === 0);
 
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      {showMain ? (
-        <Stack.Screen name="Main" component={MainTabs} />
-      ) : (
+      {!isAuthenticated ? (
         <Stack.Screen name="Auth" component={AuthStack} />
+      ) : needsOnboarding ? (
+        <Stack.Screen name="Onboarding" component={OnboardingInterestsScreen} />
+      ) : (
+        <Stack.Screen name="Main" component={MainTabs} />
       )}
     </Stack.Navigator>
   );
