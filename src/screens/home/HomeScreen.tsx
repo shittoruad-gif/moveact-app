@@ -14,15 +14,24 @@ import { useReviewRequest } from '../../hooks/useReviewRequest';
 import { buildInterestFilter } from '../../lib/interests';
 import type { Announcement, Product } from '../../types/database';
 
+interface NextBooking {
+  type: 'lesson' | 'treatment';
+  title: string;
+  startsAt: string;
+  storeId: string;
+  lessonId?: string;
+}
+
 export function HomeScreen() {
   const navigation = useNavigation<any>();
   const reviewRequest = useReviewRequest();
   const { profile } = useAuthStore();
   const { selectedStore } = useStoreSelection();
   const { totalRemainingSessions, refetch: refetchTickets } = useTickets();
-  const { myBookings, refetch: refetchLessons } = useGroupLessons();
+  const { refetch: refetchLessons } = useGroupLessons();
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [recommendedProducts, setRecommendedProducts] = useState<Product[]>([]);
+  const [nextBooking, setNextBooking] = useState<NextBooking | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const firstName = profile?.full_name?.split(/\s/)[0] ?? '';
@@ -30,7 +39,60 @@ export function HomeScreen() {
   useEffect(() => {
     fetchAnnouncements();
     fetchRecommended();
+    fetchNextBooking();
   }, [selectedStore, profile?.interests]);
+
+  // 未来で最も近い予約を、グループレッスン・個別施術の両方から1件取得する。
+  // 過去の予約は表示しない（starts_at が現在以降のもののみ）。
+  async function fetchNextBooking() {
+    if (!profile?.id) { setNextBooking(null); return; }
+    const nowIso = new Date().toISOString();
+
+    const [lessonRes, treatmentRes] = await Promise.all([
+      supabase
+        .from('group_lesson_bookings')
+        .select('id, group_lesson_id, group_lesson:group_lessons(title, starts_at, store_id)')
+        .eq('user_id', profile.id)
+        .eq('status', 'confirmed'),
+      supabase
+        .from('app_bookings')
+        .select('id, store_id, starts_at, treatment_menu:treatment_menus(name)')
+        .eq('user_id', profile.id)
+        .in('status', ['confirmed'])
+        .gte('starts_at', nowIso)
+        .order('starts_at', { ascending: true })
+        .limit(1),
+    ]);
+
+    const candidates: NextBooking[] = [];
+
+    // グループレッスン（未来のみ）
+    for (const b of (lessonRes.data ?? []) as any[]) {
+      const gl = b.group_lesson;
+      if (gl?.starts_at && gl.starts_at >= nowIso) {
+        candidates.push({
+          type: 'lesson',
+          title: gl.title,
+          startsAt: gl.starts_at,
+          storeId: gl.store_id,
+          lessonId: b.group_lesson_id,
+        });
+      }
+    }
+    // 個別施術予約（未来のみ）
+    const t = (treatmentRes.data ?? [])[0] as any;
+    if (t?.starts_at && t.starts_at >= nowIso) {
+      candidates.push({
+        type: 'treatment',
+        title: t.treatment_menu?.name ?? '施術のご予約',
+        startsAt: t.starts_at,
+        storeId: t.store_id,
+      });
+    }
+
+    candidates.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+    setNextBooking(candidates[0] ?? null);
+  }
 
   async function fetchAnnouncements() {
     const { data } = await supabase
@@ -85,11 +147,9 @@ export function HomeScreen() {
 
   async function onRefresh() {
     setRefreshing(true);
-    await Promise.all([refetchTickets(), refetchLessons(), fetchAnnouncements(), fetchRecommended()]);
+    await Promise.all([refetchTickets(), refetchLessons(), fetchAnnouncements(), fetchRecommended(), fetchNextBooking()]);
     setRefreshing(false);
   }
-
-  const nextBooking = myBookings[0];
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -113,26 +173,38 @@ export function HomeScreen() {
         </Text>
       </View>
 
-      {/* Next Booking */}
-      {nextBooking?.group_lesson && (
+      {/* Next Booking（未来の予約のみ・店舗名つき。レッスン/施術 両対応） */}
+      {nextBooking && (
         <TouchableOpacity
           style={styles.bookingCard}
-          onPress={() => navigation.navigate('BookingTab', {
-            screen: 'GroupLessonDetail',
-            params: { lessonId: nextBooking.group_lesson_id },
-          })}
+          onPress={() => {
+            if (nextBooking.type === 'lesson' && nextBooking.lessonId) {
+              navigation.navigate('BookingTab', {
+                screen: 'GroupLessonDetail',
+                params: { lessonId: nextBooking.lessonId },
+              });
+            } else {
+              navigation.navigate('BookingTab');
+            }
+          }}
         >
           <View style={styles.bookingCardAccent} />
           <View style={styles.bookingCardContent}>
             <Text style={styles.cardLabel}>次のご予約</Text>
-            <Text style={styles.bookingTitle}>{nextBooking.group_lesson.title}</Text>
+            <Text style={styles.bookingTitle}>{nextBooking.title}</Text>
             <View style={styles.bookingDateRow}>
               <Ionicons name="time-outline" size={14} color={COLORS.textSecondary} />
               <Text style={styles.bookingDate}>
-                {new Date(nextBooking.group_lesson.starts_at).toLocaleDateString('ja-JP', {
+                {new Date(nextBooking.startsAt).toLocaleDateString('ja-JP', {
                   month: 'long', day: 'numeric', weekday: 'short',
                   hour: '2-digit', minute: '2-digit',
                 })}
+              </Text>
+            </View>
+            <View style={styles.bookingDateRow}>
+              <Ionicons name="location-outline" size={14} color={COLORS.textSecondary} />
+              <Text style={styles.bookingDate}>
+                {STORES[nextBooking.storeId as keyof typeof STORES]?.name ?? '店舗未設定'}
               </Text>
             </View>
           </View>
@@ -259,6 +331,8 @@ export function HomeScreen() {
         onYes={reviewRequest.handleYes}
         onNo={reviewRequest.handleNo}
         onNeverShow={reviewRequest.handleNeverShow}
+        onGoogleReview={reviewRequest.handleGoogleReview}
+        showGoogleReviewButton={reviewRequest.showGoogleReviewButton}
       />
     </ScrollView>
   );

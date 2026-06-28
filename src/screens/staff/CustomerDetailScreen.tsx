@@ -5,23 +5,25 @@ import { COLORS } from '../../lib/constants';
 import { supabase } from '../../lib/supabase';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { StaffStackParamList } from '../../types/navigation';
-import type { Profile, AppBooking, CounselingSheet, Order } from '../../types/database';
+import type { Profile, AppBooking, CounselingSheet, Order, Karte } from '../../types/database';
+import { TREATMENT_TYPES, PRESET_CUSTOMER_TAGS } from '../../lib/constants';
 
 type Props = NativeStackScreenProps<StaffStackParamList, 'CustomerDetail'>;
 
-export function CustomerDetailScreen({ route }: Props) {
+export function CustomerDetailScreen({ route, navigation }: Props) {
   const { userId } = route.params;
   const [profile, setProfile] = useState<Profile | null>(null);
   const [bookings, setBookings] = useState<AppBooking[]>([]);
   const [counselingSheets, setCounselingSheets] = useState<CounselingSheet[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [kartes, setKartes] = useState<Karte[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => { fetchAll(); }, []);
 
   async function fetchAll() {
     setRefreshing(true);
-    const [profileRes, bookingsRes, counselingRes, ordersRes] = await Promise.all([
+    const [profileRes, bookingsRes, counselingRes, ordersRes, kartesRes] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', userId).single(),
       supabase.from('app_bookings').select('*, treatment_menu:treatment_menus(name)')
         .eq('user_id', userId).order('starts_at', { ascending: false }).limit(20),
@@ -29,11 +31,14 @@ export function CustomerDetailScreen({ route }: Props) {
         .eq('user_id', userId).order('created_at', { ascending: false }),
       supabase.from('orders').select('*, items:order_items(*, product:products(name))')
         .eq('user_id', userId).order('created_at', { ascending: false }).limit(10),
+      supabase.from('kartes').select('*, staff:profiles!kartes_staff_id_fkey(full_name)')
+        .eq('customer_id', userId).order('treatment_date', { ascending: false }).limit(20),
     ]);
     setProfile(profileRes.data as Profile);
     setBookings((bookingsRes.data as AppBooking[]) ?? []);
     setCounselingSheets((counselingRes.data as CounselingSheet[]) ?? []);
     setOrders((ordersRes.data as Order[]) ?? []);
+    setKartes((kartesRes.data as Karte[]) ?? []);
     setRefreshing(false);
   }
 
@@ -75,6 +80,21 @@ export function CustomerDetailScreen({ route }: Props) {
             </TouchableOpacity>
           )}
         </View>
+
+        {/* Primary action: create next booking */}
+        <TouchableOpacity
+          style={styles.createBookingBtn}
+          onPress={() => navigation.navigate('StaffBookingForm', { customerId: userId })}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="calendar" size={18} color="#FFF" />
+          <Text style={styles.createBookingBtnText}>次回予約を作成</Text>
+          {profile.line_user_id && (
+            <View style={styles.lineIndicator}>
+              <Ionicons name="chatbubble" size={11} color="#06C755" />
+            </View>
+          )}
+        </TouchableOpacity>
       </View>
 
       {/* Basic info */}
@@ -93,9 +113,65 @@ export function CustomerDetailScreen({ route }: Props) {
       {/* Tags */}
       <TagSection userId={userId} tags={profile.tags ?? []} onUpdate={fetchAll} />
 
-      {/* Counseling sheet / Karte */}
+      {/* Karte (Treatment Records) */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>カルテ（カウンセリングシート）</Text>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>施術カルテ</Text>
+          <TouchableOpacity
+            style={styles.newKarteBtn}
+            onPress={() => navigation.navigate('KarteForm', { customerId: userId })}
+          >
+            <Ionicons name="add-circle-outline" size={16} color="#FFF" />
+            <Text style={styles.newKarteBtnText}>新規カルテ</Text>
+          </TouchableOpacity>
+        </View>
+        {kartes.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Ionicons name="clipboard-outline" size={24} color={COLORS.borderLight} />
+            <Text style={styles.emptyCardText}>施術カルテなし</Text>
+          </View>
+        ) : (
+          kartes.map((k) => (
+            <TouchableOpacity
+              key={k.id}
+              style={styles.karteCard}
+              onPress={() => navigation.navigate('KarteDetail', { karteId: k.id })}
+            >
+              <View style={styles.karteHeader}>
+                <Text style={styles.karteDate}>
+                  {new Date(k.treatment_date + 'T00:00:00').toLocaleDateString('ja-JP', {
+                    year: 'numeric', month: 'short', day: 'numeric',
+                  })}
+                </Text>
+                {k.treatment_type && (
+                  <View style={styles.karteBadge}>
+                    <Text style={styles.karteBadgeText}>
+                      {TREATMENT_TYPES[k.treatment_type] ?? k.treatment_type}
+                    </Text>
+                  </View>
+                )}
+              </View>
+              {k.chief_complaint && (
+                <Text style={styles.karteComplaint} numberOfLines={1}>
+                  主訴: {k.chief_complaint}
+                </Text>
+              )}
+              {k.treatment_content && (
+                <Text style={styles.karteSummary} numberOfLines={2}>
+                  {k.treatment_content}
+                </Text>
+              )}
+              <Text style={styles.karteStaff}>
+                担当: {(k.staff as any)?.full_name ?? '---'}
+              </Text>
+            </TouchableOpacity>
+          ))
+        )}
+      </View>
+
+      {/* Counseling sheet */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>カウンセリングシート</Text>
         {counselingSheets.length === 0 ? (
           <View style={styles.emptyCard}>
             <Ionicons name="document-text-outline" size={24} color={COLORS.borderLight} />
@@ -195,7 +271,7 @@ function InfoRow({ label, value, last }: { label: string; value: string; last?: 
   );
 }
 
-const PRESET_TAGS = ['VIP', '旧料金', '回数券優待', 'スタッフ', '紹介済'];
+const PRESET_TAGS = PRESET_CUSTOMER_TAGS;
 
 function TagSection({ userId, tags, onUpdate }: { userId: string; tags: string[]; onUpdate: () => void }) {
   const [newTag, setNewTag] = useState('');
@@ -361,8 +437,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18, paddingVertical: 10, borderRadius: 20,
   },
   actionBtnText: { fontSize: 13, fontWeight: '600', color: COLORS.accent },
+  createBookingBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: COLORS.accent, paddingHorizontal: 24, paddingVertical: 12,
+    borderRadius: 24, marginTop: 14,
+  },
+  createBookingBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  lineIndicator: {
+    backgroundColor: '#FFF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8,
+    marginLeft: 4,
+  },
   section: { paddingHorizontal: 20, marginTop: 20 },
+  sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   sectionTitle: { fontSize: 15, fontWeight: '600', color: COLORS.text, marginBottom: 10 },
+  newKarteBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: COLORS.accent, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16,
+  },
+  newKarteBtnText: { fontSize: 12, fontWeight: '600', color: '#FFF' },
+  karteCard: {
+    backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, marginBottom: 10, gap: 6,
+  },
+  karteHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  karteDate: { fontSize: 14, fontWeight: '600', color: COLORS.text },
+  karteBadge: {
+    backgroundColor: COLORS.accent, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10,
+  },
+  karteBadgeText: { fontSize: 11, fontWeight: '600', color: '#FFF' },
+  karteComplaint: { fontSize: 12, color: COLORS.textSecondary },
+  karteSummary: { fontSize: 13, color: COLORS.text, lineHeight: 19 },
+  karteStaff: { fontSize: 11, color: COLORS.textLight },
   infoCard: { backgroundColor: COLORS.surface, borderRadius: 14 },
   emptyCard: {
     backgroundColor: COLORS.surface, borderRadius: 14, padding: 24,

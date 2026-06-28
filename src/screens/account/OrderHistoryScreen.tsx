@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, StyleSheet, RefreshControl } from 'react-native';
+import { View, Text, FlatList, StyleSheet, RefreshControl, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { COLORS, STORES } from '../../lib/constants';
 import { useAuthStore } from '../../stores/authStore';
 import { supabase } from '../../lib/supabase';
+import { formatYen } from '../../lib/format';
 import type { Order } from '../../types/database';
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -16,7 +18,11 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   refunded: { label: '返金済', color: COLORS.textLight },
 };
 
+// 領収書発行が可能な注文ステータス
+const RECEIPT_ELIGIBLE_STATUSES = new Set(['paid', 'preparing', 'ready', 'completed']);
+
 export function OrderHistoryScreen() {
+  const navigation = useNavigation<any>();
   const { profile } = useAuthStore();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,8 +44,11 @@ export function OrderHistoryScreen() {
   function renderOrder({ item }: { item: Order }) {
     const status = STATUS_LABELS[item.status] ?? { label: item.status, color: COLORS.textLight };
     const date = new Date(item.created_at).toLocaleDateString('ja-JP', {
+      timeZone: 'Asia/Tokyo',
       year: 'numeric', month: 'long', day: 'numeric',
     });
+    const canIssueReceipt = RECEIPT_ELIGIBLE_STATUSES.has(item.status);
+    const discountAmount = (item as any).discount_amount as number | null | undefined;
 
     return (
       <View style={styles.orderCard}>
@@ -50,16 +59,45 @@ export function OrderHistoryScreen() {
           </View>
         </View>
         <View style={styles.orderItems}>
-          {(item.items ?? []).map((oi: any, i: number) => (
-            <Text key={i} style={styles.orderItemText} numberOfLines={1}>
-              {oi.product?.name ?? '商品'} x{oi.quantity}
+          {(item.items ?? []).length === 0 ? (
+            <Text style={[styles.orderItemText, { color: COLORS.error }]}>
+              商品情報が見つかりません
             </Text>
-          ))}
+          ) : (
+            (item.items ?? []).map((oi: any, i: number) => (
+              <Text key={i} style={styles.orderItemText} numberOfLines={1}>
+                {oi.product?.name ?? '商品'} x{oi.quantity}
+              </Text>
+            ))
+          )}
         </View>
+        {discountAmount && discountAmount > 0 ? (
+          <View style={styles.discountRow}>
+            <Ionicons name="pricetag-outline" size={12} color={COLORS.accent} />
+            <Text style={styles.discountText}>クーポン割引: -{formatYen(discountAmount)}</Text>
+          </View>
+        ) : null}
         <View style={styles.orderFooter}>
           <Text style={styles.storeName}>{STORES[item.store_id]?.name ?? item.store_id}</Text>
-          <Text style={styles.orderTotal}>¥{item.total.toLocaleString()}</Text>
+          <Text style={styles.orderTotal}>{formatYen(item.total)}</Text>
         </View>
+        {canIssueReceipt ? (
+          <TouchableOpacity
+            style={styles.receiptBtn}
+            onPress={() => navigation.navigate('CustomerReceipt', { orderId: item.id })}
+          >
+            <Ionicons name="receipt-outline" size={14} color={COLORS.accent} />
+            <Text style={styles.receiptBtnText}>領収書を発行 / ダウンロード</Text>
+            <Ionicons name="chevron-forward" size={14} color={COLORS.accent} />
+          </TouchableOpacity>
+        ) : item.status === 'pending' ? (
+          <View style={styles.receiptPending}>
+            <Ionicons name="time-outline" size={13} color={COLORS.textLight} />
+            <Text style={styles.receiptPendingText}>
+              お支払い完了後に領収書を発行できます
+            </Text>
+          </View>
+        ) : null}
       </View>
     );
   }
@@ -100,6 +138,11 @@ const styles = StyleSheet.create({
   orderDate: { fontSize: 13, fontWeight: '600', color: COLORS.text },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   statusText: { fontSize: 11, fontWeight: '700' },
+  discountRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    marginBottom: 8,
+  },
+  discountText: { fontSize: 12, color: COLORS.accent, fontWeight: '600' },
   orderItems: { gap: 4, marginBottom: 10 },
   orderItemText: { fontSize: 13, color: COLORS.textSecondary },
   orderFooter: {
@@ -112,6 +155,24 @@ const styles = StyleSheet.create({
   },
   storeName: { fontSize: 12, color: COLORS.textLight },
   orderTotal: { fontSize: 16, fontWeight: '700', color: COLORS.accent },
+  receiptBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginTop: 10, paddingVertical: 10, paddingHorizontal: 12,
+    backgroundColor: COLORS.accent + '12',
+    borderRadius: 10,
+  },
+  receiptBtnText: {
+    flex: 1, fontSize: 12, fontWeight: '700', color: COLORS.accent,
+  },
+  receiptPending: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginTop: 10, paddingVertical: 8, paddingHorizontal: 12,
+    backgroundColor: COLORS.backgroundSoft,
+    borderRadius: 10,
+  },
+  receiptPendingText: {
+    fontSize: 11, color: COLORS.textLight,
+  },
   empty: { alignItems: 'center', paddingVertical: 60, gap: 12 },
   emptyText: { fontSize: 14, color: COLORS.textLight },
 });

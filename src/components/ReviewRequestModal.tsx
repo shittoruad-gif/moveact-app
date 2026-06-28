@@ -9,6 +9,8 @@ interface ReviewRequestModalProps {
   onYes: () => void;
   onNo: () => void;
   onNeverShow: () => void;
+  onGoogleReview?: () => void;
+  showGoogleReviewButton?: boolean;
 }
 
 export function ReviewRequestModal({
@@ -17,6 +19,8 @@ export function ReviewRequestModal({
   onYes,
   onNo,
   onNeverShow,
+  onGoogleReview,
+  showGoogleReviewButton,
 }: ReviewRequestModalProps) {
   return (
     <Modal
@@ -52,8 +56,15 @@ export function ReviewRequestModal({
           </Text>
 
           {/* Buttons */}
+          {showGoogleReviewButton && onGoogleReview && (
+            <TouchableOpacity style={styles.googleButton} onPress={onGoogleReview}>
+              <Ionicons name="logo-google" size={16} color="#FFF" style={{ marginRight: 6 }} />
+              <Text style={styles.primaryButtonText}>Google で口コミを書く</Text>
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity style={styles.primaryButton} onPress={onYes}>
-            <Text style={styles.primaryButtonText}>口コミを書く</Text>
+            <Text style={styles.primaryButtonText}>口コミ文を作る</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.secondaryButton} onPress={onNo}>
@@ -136,6 +147,17 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 32,
     width: '100%',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  googleButton: {
+    backgroundColor: '#4285F4',
+    borderRadius: 24,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 10,
   },

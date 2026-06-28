@@ -102,6 +102,11 @@ export function useAuth() {
     return { data, error };
   }
 
+  async function refreshProfile() {
+    if (!session?.user) return;
+    await fetchProfile(session.user.id);
+  }
+
   return {
     session,
     profile,
@@ -112,5 +117,6 @@ export function useAuth() {
     signUpWithEmail,
     signOut,
     updateProfile,
+    refreshProfile,
   };
 }

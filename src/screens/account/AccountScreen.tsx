@@ -19,10 +19,16 @@ export function AccountScreen() {
   }
 
   const menuItems = [
+    { label: '予約履歴', icon: 'calendar-outline' as const, screen: 'MyBookings' },
     { label: '注文履歴', icon: 'receipt-outline' as const, screen: 'OrderHistory' },
     { label: 'お気に入り', icon: 'heart-outline' as const, screen: 'Favorites' },
     { label: 'クーポン', icon: 'ticket-outline' as const, screen: 'CouponList' },
     { label: 'お友達紹介', icon: 'gift-outline' as const, screen: 'ReferralScreen' },
+    {
+      label: profile?.line_user_id ? 'LINE連携（済）' : 'LINE連携',
+      icon: 'chatbubble-outline' as const,
+      screen: 'LineLink',
+    },
     { label: '通知設定', icon: 'notifications-outline' as const, screen: 'NotificationSettings' },
     { label: '店舗を切り替え', icon: 'storefront-outline' as const, screen: 'StoreSelect' },
   ];

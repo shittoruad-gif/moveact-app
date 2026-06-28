@@ -8,9 +8,6 @@ import { useAuthStore } from '../stores/authStore';
 import { COLORS } from '../lib/constants';
 import type { RootStackParamList } from '../types/navigation';
 
-// Set to true to preview the main app without authentication
-const PREVIEW_MODE = false;
-
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export function RootNavigator() {
@@ -24,7 +21,7 @@ export function RootNavigator() {
     );
   }
 
-  const isAuthenticated = PREVIEW_MODE || !!session;
+  const isAuthenticated = !!session;
   const needsOnboarding = isAuthenticated && profile && (!profile.interests || profile.interests.length === 0);
 
   return (

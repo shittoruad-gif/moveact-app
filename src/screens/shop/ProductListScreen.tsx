@@ -19,7 +19,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../lib/constants';
 import { StoreSelector } from '../../components/layout/StoreSelector';
 import { useStoreSelection } from '../../stores/storeSelectionStore';
-import { useCartStore } from '../../stores/cartStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useFavoritesStore } from '../../stores/favoritesStore';
 import { supabase } from '../../lib/supabase';
@@ -59,7 +58,6 @@ export function ProductListScreen() {
   const navigation = useNavigation<any>();
   const { selectedStore } = useStoreSelection();
   const { profile } = useAuthStore();
-  const itemCount = useCartStore((s) => s.getItemCount());
   const { favoriteIds, toggle: toggleFavorite, fetch: fetchFavorites } = useFavoritesStore();
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -173,7 +171,17 @@ export function ProductListScreen() {
           {item.description && (
             <Text style={styles.productDesc} numberOfLines={1}>{item.description}</Text>
           )}
-          <Text style={styles.productPrice}>¥{item.price.toLocaleString()}</Text>
+          <View style={styles.priceRouteRow}>
+            <Text style={styles.productPrice}>¥{item.price.toLocaleString()}</Text>
+            <View style={styles.routeIconRow}>
+              {item.available_in_store !== false && (
+                <Ionicons name="storefront" size={10} color={COLORS.accent} />
+              )}
+              {item.bhappy_url && (
+                <Ionicons name="globe" size={10} color="#FF2D55" />
+              )}
+            </View>
+          </View>
         </View>
       </TouchableOpacity>
     );
@@ -206,17 +214,6 @@ export function ProductListScreen() {
           )}
         </TouchableOpacity>
       </View>
-
-      {/* Cart banner */}
-      {itemCount > 0 && (
-        <TouchableOpacity style={styles.cartBanner} onPress={() => navigation.navigate('Cart')}>
-          <View style={styles.cartBannerLeft}>
-            <Ionicons name="bag-outline" size={18} color="#FFF" />
-            <Text style={styles.cartBannerText}>カートに {itemCount} 点</Text>
-          </View>
-          <Text style={styles.cartBannerAction}>確認する</Text>
-        </TouchableOpacity>
-      )}
 
       {/* Collapsible filters */}
       {filtersExpanded && (
@@ -444,7 +441,9 @@ const styles = StyleSheet.create({
   categoryBadgeText: { fontSize: 9, fontWeight: '600', color: COLORS.accent },
   productName: { fontSize: 12, fontWeight: '500', color: COLORS.text, lineHeight: 16 },
   productDesc: { fontSize: 10, color: COLORS.textLight, lineHeight: 14 },
-  productPrice: { fontSize: 15, fontWeight: '700', color: COLORS.accent, marginTop: 2 },
+  priceRouteRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 },
+  productPrice: { fontSize: 15, fontWeight: '700', color: COLORS.accent },
+  routeIconRow: { flexDirection: 'row', gap: 4, alignItems: 'center' },
 
   /* Empty */
   emptyState: { alignItems: 'center', paddingVertical: 48, gap: 12 },

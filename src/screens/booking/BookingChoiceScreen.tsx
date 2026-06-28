@@ -25,7 +25,7 @@ export function BookingChoiceScreen() {
 
         <TouchableOpacity
           style={[styles.card, styles.newCustomerCard]}
-          onPress={() => navigation.navigate('BookingCalendar', { isNewCustomer: true })}
+          onPress={() => navigation.navigate('BookingStart', { isNewCustomer: true })}
         >
           <View style={[styles.iconWrap, { backgroundColor: 'rgba(196,149,106,0.15)' }]}>
             <Ionicons name="person-add-outline" size={24} color={COLORS.accent} />
@@ -52,7 +52,7 @@ export function BookingChoiceScreen() {
 
         <TouchableOpacity
           style={styles.card}
-          onPress={() => navigation.navigate('BookingCalendar', { isNewCustomer: false })}
+          onPress={() => navigation.navigate('BookingStart', { isNewCustomer: false })}
         >
           <View style={[styles.iconWrap, { backgroundColor: '#E5EDE8' }]}>
             <Ionicons name="calendar-outline" size={24} color={COLORS.success} />
@@ -61,22 +61,6 @@ export function BookingChoiceScreen() {
             <Text style={styles.cardTitle}>施術予約</Text>
             <Text style={styles.cardDescription}>
               メニュー・日時を選んでそのまま予約できます
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={COLORS.textLight} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.card}
-          onPress={() => navigation.navigate('BookingWebView', { storeId: selectedStore })}
-        >
-          <View style={[styles.iconWrap, { backgroundColor: '#F5EDE5' }]}>
-            <Ionicons name="globe-outline" size={24} color={COLORS.accent} />
-          </View>
-          <View style={styles.cardText}>
-            <Text style={styles.cardTitle}>Web予約（エアリザーブ）</Text>
-            <Text style={styles.cardDescription}>
-              外部予約サイトからご予約いただけます
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color={COLORS.textLight} />
@@ -131,6 +115,22 @@ export function BookingChoiceScreen() {
             <Text style={styles.cardTitle}>店舗案内</Text>
             <Text style={styles.cardDescription}>
               アクセス・駐車場・ご来店時のご案内
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={COLORS.textLight} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.card}
+          onPress={() => navigation.navigate('AfterHoursRequest', { storeId: selectedStore })}
+        >
+          <View style={[styles.iconWrap, { backgroundColor: '#EEE8F5' }]}>
+            <Ionicons name="moon-outline" size={24} color="#7B5EA7" />
+          </View>
+          <View style={styles.cardText}>
+            <Text style={styles.cardTitle}>営業時間外リクエスト</Text>
+            <Text style={styles.cardDescription}>
+              21:00以降・9:00以前をご希望の方はこちら
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color={COLORS.textLight} />

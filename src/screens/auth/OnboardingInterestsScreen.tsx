@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   SafeAreaView,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../lib/constants';
@@ -46,11 +47,13 @@ export function OnboardingInterestsScreen() {
 
       if (error) {
         console.error('Failed to save interests:', error);
+        Alert.alert('保存に失敗しました', '通信環境をご確認のうえ、もう一度お試しください。');
       } else if (data) {
         setProfile(data as Profile);
       }
     } catch (e) {
       console.error('Error saving interests:', e);
+      Alert.alert('保存に失敗しました', '通信環境をご確認のうえ、もう一度お試しください。');
     } finally {
       setSaving(false);
     }
@@ -69,11 +72,13 @@ export function OnboardingInterestsScreen() {
 
       if (error) {
         console.error('Failed to skip interests:', error);
+        Alert.alert('エラー', '通信環境をご確認のうえ、もう一度お試しください。');
       } else if (data) {
         setProfile(data as Profile);
       }
     } catch (e) {
       console.error('Error skipping interests:', e);
+      Alert.alert('エラー', '通信環境をご確認のうえ、もう一度お試しください。');
     } finally {
       setSaving(false);
     }

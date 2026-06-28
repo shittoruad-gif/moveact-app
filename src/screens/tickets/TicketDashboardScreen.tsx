@@ -67,12 +67,6 @@ export function TicketDashboardScreen() {
               size="medium"
               variant="secondary"
             />
-            <Button
-              title="サブスクプラン"
-              onPress={() => navigation.navigate('Subscription')}
-              variant="outline"
-              size="medium"
-            />
           </View>
         }
         ListEmptyComponent={

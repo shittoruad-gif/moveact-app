@@ -3,11 +3,15 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, Ale
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../lib/constants';
 import { supabase } from '../../lib/supabase';
+import { useStoreSelection } from '../../stores/storeSelectionStore';
+import { formatYen } from '../../lib/format';
 
+// ステータス遷移フロー（店頭受取・店頭支払い）。
+// お支払いは商品お渡し時に店舗で行う。
 const STATUS_FLOW: Record<string, { next: string; label: string; color: string }> = {
   pending: { next: 'preparing', label: '準備開始', color: COLORS.accent },
   preparing: { next: 'ready', label: '準備完了', color: COLORS.success },
-  ready: { next: 'completed', label: 'お渡し完了', color: COLORS.primary },
+  ready: { next: 'completed', label: 'お渡し・お支払い完了', color: COLORS.primary },
 };
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -19,17 +23,19 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 export function StaffOrderListScreen() {
+  const { selectedStore } = useStoreSelection();
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('active'); // active | all
 
-  useEffect(() => { fetchOrders(); }, [filter]);
+  useEffect(() => { fetchOrders(); }, [filter, selectedStore]);
 
   async function fetchOrders() {
     setLoading(true);
     let query = supabase
       .from('orders')
       .select('*, items:order_items(*, product:products(name)), customer:profiles!user_id(full_name, phone)')
+      .eq('store_id', selectedStore)
       .order('created_at', { ascending: false })
       .limit(50);
 
@@ -42,24 +48,28 @@ export function StaffOrderListScreen() {
     setLoading(false);
   }
 
-  async function advanceStatus(orderId: string, currentStatus: string) {
-    const flow = STATUS_FLOW[currentStatus];
-    if (!flow) return;
-
-    const { error } = await supabase.from('orders').update({ status: flow.next }).eq('id', orderId);
+  async function advanceStatus(orderId: string, nextStatus: string) {
+    const { error } = await supabase
+      .from('orders')
+      .update({ status: nextStatus, updated_at: new Date().toISOString() })
+      .eq('id', orderId);
     if (error) { Alert.alert('エラー', '更新に失敗しました'); return; }
     fetchOrders();
   }
 
   function renderOrder({ item }: { item: any }) {
     const status = STATUS_LABELS[item.status] ?? { label: item.status, color: COLORS.textLight };
+    const discountAmount = item.discount_amount as number | null | undefined;
     const flow = STATUS_FLOW[item.status];
-    const date = new Date(item.created_at).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const date = new Date(item.created_at).toLocaleDateString('ja-JP', {
+      timeZone: 'Asia/Tokyo', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
 
     return (
       <View style={styles.orderCard}>
         <View style={styles.orderHeader}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.customerName}>{item.customer?.full_name ?? '---'}</Text>
             <Text style={styles.orderDate}>{date}</Text>
           </View>
@@ -69,23 +79,31 @@ export function StaffOrderListScreen() {
         </View>
 
         <View style={styles.itemsList}>
-          {(item.items ?? []).map((oi: any, i: number) => (
-            <Text key={i} style={styles.itemText}>
-              {oi.product?.name ?? '商品'} x{oi.quantity} (¥{(oi.unit_price * oi.quantity).toLocaleString()})
-            </Text>
-          ))}
+          {(item.items ?? []).length === 0 ? (
+            <Text style={[styles.itemText, { color: COLORS.error }]}>⚠ 商品情報なし</Text>
+          ) : (
+            (item.items ?? []).map((oi: any, i: number) => (
+              <Text key={i} style={styles.itemText}>
+                {oi.product?.name ?? '商品'} x{oi.quantity} ({formatYen(oi.unit_price * oi.quantity)})
+              </Text>
+            ))
+          )}
         </View>
 
+        {discountAmount && discountAmount > 0 ? (
+          <Text style={styles.discountText}>クーポン割引: -{formatYen(discountAmount)}</Text>
+        ) : null}
+
         <View style={styles.orderFooter}>
-          <Text style={styles.totalText}>合計: ¥{item.total.toLocaleString()}</Text>
-          {flow && (
+          <Text style={styles.totalText}>店頭お支払い額: {formatYen(item.total)}</Text>
+          {flow ? (
             <TouchableOpacity
               style={[styles.advanceBtn, { backgroundColor: flow.color }]}
-              onPress={() => advanceStatus(item.id, item.status)}
+              onPress={() => advanceStatus(item.id, flow.next)}
             >
               <Text style={styles.advanceBtnText}>{flow.label}</Text>
             </TouchableOpacity>
-          )}
+          ) : null}
         </View>
       </View>
     );
@@ -140,6 +158,7 @@ const styles = StyleSheet.create({
   orderDate: { fontSize: 11, color: COLORS.textLight, marginTop: 2 },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   statusText: { fontSize: 11, fontWeight: '700' },
+  discountText: { fontSize: 12, color: COLORS.accent, fontWeight: '600', marginBottom: 8 },
   itemsList: { gap: 4, marginBottom: 10 },
   itemText: { fontSize: 13, color: COLORS.textSecondary },
   orderFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 0.5, borderTopColor: COLORS.borderLight, paddingTop: 10 },

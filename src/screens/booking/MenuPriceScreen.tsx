@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, SectionList, StyleSheet } from 'react-native';
 import { COLORS, TREATMENT_TYPES } from '../../lib/constants';
 import { supabase } from '../../lib/supabase';
+import { useAuthStore } from '../../stores/authStore';
 import { Ionicons } from '@expo/vector-icons';
 import type { TreatmentMenu, TreatmentType } from '../../types/database';
 
@@ -20,11 +21,14 @@ const SECTION_CONFIG: Record<string, { icon: keyof typeof Ionicons.glyphMap; col
 };
 
 export function MenuPriceScreen() {
+  const { profile } = useAuthStore();
   const [sections, setSections] = useState<MenuSection[]>([]);
+  // メニューID → 適用される特別料金（タグ割引）
+  const [tagPriceMap, setTagPriceMap] = useState<Map<string, number>>(new Map());
 
   useEffect(() => {
     fetchMenus();
-  }, []);
+  }, [profile?.tags]);
 
   async function fetchMenus() {
     const { data } = await supabase
@@ -34,6 +38,20 @@ export function MenuPriceScreen() {
       .order('sort_order', { ascending: true });
 
     if (!data) return;
+
+    // ログイン顧客のタグに該当する特別料金を取得（メニューごと最安値）
+    const map = new Map<string, number>();
+    if (profile?.tags && profile.tags.length > 0) {
+      const { data: tpData } = await supabase
+        .from('menu_tag_prices')
+        .select('treatment_menu_id, price')
+        .in('tag', profile.tags);
+      for (const tp of (tpData ?? []) as { treatment_menu_id: string; price: number }[]) {
+        const cur = map.get(tp.treatment_menu_id);
+        if (cur === undefined || tp.price < cur) map.set(tp.treatment_menu_id, tp.price);
+      }
+    }
+    setTagPriceMap(map);
 
     const grouped: Record<string, TreatmentMenu[]> = {};
     for (const item of data as TreatmentMenu[]) {
@@ -73,20 +91,32 @@ export function MenuPriceScreen() {
             <Text style={styles.sectionTitle}>{section.title}</Text>
           </View>
         )}
-        renderItem={({ item }) => (
-          <View style={styles.menuItem}>
-            <View style={styles.menuInfo}>
-              <Text style={styles.menuName}>{item.name}</Text>
-              {item.description && (
-                <Text style={styles.menuDesc} numberOfLines={2}>{item.description}</Text>
+        renderItem={({ item }) => {
+          const special = tagPriceMap.get(item.id);
+          const hasDiscount = special !== undefined && special < item.price;
+          return (
+            <View style={styles.menuItem}>
+              <View style={styles.menuInfo}>
+                <Text style={styles.menuName}>{item.name}</Text>
+                {item.description && (
+                  <Text style={styles.menuDesc} numberOfLines={2}>{item.description}</Text>
+                )}
+                <Text style={styles.menuDuration}>{item.duration_minutes}分</Text>
+              </View>
+              {hasDiscount ? (
+                <View style={styles.priceCol}>
+                  <View style={styles.memberBadge}>
+                    <Text style={styles.memberBadgeText}>会員価格</Text>
+                  </View>
+                  <Text style={styles.originalPrice}>¥{item.price.toLocaleString()}</Text>
+                  <Text style={styles.menuPrice}>¥{special!.toLocaleString()}</Text>
+                </View>
+              ) : (
+                <Text style={styles.menuPrice}>¥{item.price.toLocaleString()}</Text>
               )}
-              <Text style={styles.menuDuration}>{item.duration_minutes}分</Text>
             </View>
-            <Text style={styles.menuPrice}>
-              ¥{item.price.toLocaleString()}
-            </Text>
-          </View>
-        )}
+          );
+        }}
         renderSectionFooter={() => <View style={{ height: 8 }} />}
       />
     </View>
@@ -160,5 +190,17 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: COLORS.primary,
+  },
+  priceCol: {
+    alignItems: 'flex-end',
+  },
+  memberBadge: {
+    backgroundColor: COLORS.accentPink + '25',
+    paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, marginBottom: 2,
+  },
+  memberBadgeText: { fontSize: 9, fontWeight: '700', color: COLORS.accentPink },
+  originalPrice: {
+    fontSize: 12, color: COLORS.textLight,
+    textDecorationLine: 'line-through',
   },
 });

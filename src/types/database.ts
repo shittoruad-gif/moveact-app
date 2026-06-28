@@ -7,7 +7,7 @@ export type TicketStatus = 'active' | 'expired' | 'fully_used' | 'cancelled';
 export type SubscriptionStatus = 'active' | 'paused' | 'cancelled' | 'past_due';
 export type OrderStatus = 'pending' | 'paid' | 'preparing' | 'ready' | 'completed' | 'cancelled' | 'refunded';
 export type BookingStatus = 'confirmed' | 'cancelled_by_user' | 'cancelled_same_day' | 'completed' | 'no_show';
-export type CancellationChargeType = 'ticket_deduction' | 'stripe_charge' | 'waived';
+export type CancellationChargeType = 'ticket_deduction' | 'stripe_charge' | 'waived' | 'unpaid';
 export type UserRole = 'customer' | 'staff' | 'admin';
 
 export interface Profile {
@@ -47,6 +47,26 @@ export interface TreatmentMenu {
   description: string | null;
   duration_minutes: number;
   price: number;
+  is_active: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
+// 施術教材ライブラリ（書籍由来・スタッフ専用）。テーブル名は pilates_exercises だが
+// discipline で分野（ピラティス/鍼灸/リハビリ/解剖/トレーニング）を区別する。
+export interface PilatesExercise {
+  id: string;
+  discipline: string;
+  name_ja: string;
+  name_en: string | null;
+  equipment: string | null;
+  level: string | null;
+  category: string | null;
+  purpose: string | null;
+  concerns: string[];
+  cues: string | null;
+  cautions: string | null;
+  source: string | null;
   is_active: boolean;
   sort_order: number;
   created_at: string;
@@ -182,6 +202,15 @@ export interface Product {
   is_active: boolean;
   sort_order: number;
   stripe_price_id: string | null;
+  // Purchase routes (any combination)
+  bhappy_url: string | null;
+  paypay_url: string | null;
+  available_in_store: boolean;
+  brand: string | null;
+  wholesale_price: number | null;
+  colors: string[] | null;
+  sizes: string[] | null;
+  low_stock_threshold?: number;
   created_at: string;
   updated_at: string;
   // Joined data
@@ -229,9 +258,13 @@ export interface Announcement {
   store_id: StoreId | null;
   title: string;
   body: string | null;
+  content?: string | null; // alias used in DB in some places
   image_url: string | null;
   published_at: string | null;
   is_active: boolean;
+  broadcast_to_line?: boolean;
+  line_broadcast_at?: string | null;
+  line_broadcast_count?: number;
   created_at: string;
 }
 
@@ -263,6 +296,10 @@ export interface AppBooking {
   prepayment_url: string | null;
   stripe_payment_intent_id: string | null;
   note: string | null;
+  applied_coupon_id: string | null;
+  customer_request: string | null;
+  is_staff_nominated: boolean;
+  recurrence_group_id: string | null;
   created_by: 'client' | 'staff';
   created_at: string;
   updated_at: string;
@@ -338,6 +375,208 @@ export interface Referral {
   status: 'sent' | 'registered' | 'completed';
   referral_code: string;
   created_at: string;
+}
+
+// LINE Integration
+export interface LineLinkToken {
+  id: string;
+  user_id: string;
+  token: string;
+  expires_at: string;
+  used_at: string | null;
+  created_at: string;
+}
+
+export type LineNotificationStatus = 'sent' | 'failed' | 'skipped';
+export type LineMessageType =
+  | 'booking_created'
+  | 'booking_reminder'
+  | 'booking_cancelled'
+  | 'booking_rescheduled'
+  | 'custom';
+
+export interface LineNotificationLog {
+  id: string;
+  user_id: string;
+  booking_id: string | null;
+  message_type: LineMessageType;
+  line_user_id: string | null;
+  payload: Record<string, unknown> | null;
+  status: LineNotificationStatus;
+  error_message: string | null;
+  sent_at: string;
+}
+
+// Staff Operations (migration 018)
+
+export interface StaffUnavailability {
+  id: string;
+  staff_id: string | null;
+  store_id: string | null;
+  starts_at: string;
+  ends_at: string;
+  reason: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface StaffNote {
+  id: string;
+  author_id: string | null;
+  store_id: string | null;
+  title: string | null;
+  body: string;
+  is_pinned: boolean;
+  tags: string[] | null;
+  created_at: string;
+  updated_at: string;
+  author?: Profile;
+}
+
+export interface StaffNoteRead {
+  note_id: string;
+  staff_id: string;
+  read_at: string;
+}
+
+export interface DailyReport {
+  id: string;
+  report_date: string;
+  store_id: string;
+  author_id: string | null;
+  revenue_total: number | null;
+  booking_count: number | null;
+  walk_in_count: number | null;
+  cancellation_count: number | null;
+  no_show_count: number | null;
+  checklist: Array<{ key: string; label: string; checked: boolean }> | null;
+  notes: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WalkInSale {
+  id: string;
+  store_id: string;
+  staff_id: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  subtotal: number;
+  tax: number;
+  total: number;
+  payment_method: string | null;
+  items: Array<{ product_id?: string; name: string; qty: number; unit_price: number }>;
+  note: string | null;
+  sold_at: string;
+  created_at: string;
+}
+
+export interface Receipt {
+  id: string;
+  receipt_number: string;
+  issued_to_name: string;
+  proviso: string | null;
+  amount: number;
+  tax: number;
+  source_type: string | null;
+  source_id: string | null;
+  customer_id: string | null;
+  store_id: string | null;
+  issued_by: string | null;
+  issued_at: string;
+  payload: Record<string, unknown> | null;
+}
+
+export interface AirReserveSource {
+  id: string;
+  label: string;
+  store_id: string;
+  staff_id: string | null;
+  ical_url: string;
+  is_active: boolean;
+  last_synced_at: string | null;
+  last_sync_status: string | null;
+  last_sync_error: string | null;
+  events_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AirReserveEvent {
+  id: string;
+  source_id: string;
+  external_uid: string;
+  store_id: string;
+  staff_id: string | null;
+  starts_at: string;
+  ends_at: string;
+  summary: string | null;
+  description: string | null;
+  location: string | null;
+  raw: Record<string, string> | null;
+  synced_at: string;
+}
+
+export interface CustomerLastVisitView {
+  user_id: string;
+  full_name: string;
+  full_name_kana: string | null;
+  phone: string | null;
+  email: string | null;
+  line_user_id: string | null;
+  date_of_birth: string | null;
+  registered_at: string;
+  last_booking_at: string | null;
+  total_completed_bookings: number;
+}
+
+export interface MenuUsageView {
+  menu_id: string;
+  menu_name: string;
+  duration_minutes: number;
+  bookings_total: number;
+  bookings_completed: number;
+  bookings_cancelled: number;
+  bookings_no_show: number;
+}
+
+// Staff Registration (admin pre-registers staff phone numbers or emails)
+export interface StaffRegistration {
+  id: string;
+  phone: string | null;
+  email: string | null;
+  name: string | null;
+  store_id: StoreId | null;
+  registered_by: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// Karte (Treatment Records)
+export interface Karte {
+  id: string;
+  customer_id: string;
+  staff_id: string;
+  booking_id: string | null;
+  store_id: StoreId;
+  treatment_date: string; // YYYY-MM-DD
+  treatment_type: TreatmentType | null;
+  chief_complaint: string | null;    // S: 主訴・お悩み
+  body_condition: string | null;     // O: 体の状態
+  findings: string | null;           // O: 所見
+  assessment: string | null;         // A: 評価・見立て
+  treatment_content: string | null;  // P: 施術内容
+  treatment_plan: string | null;     // P: 今後の方針
+  home_care_advice: string | null;   // P: ホームケアアドバイス
+  next_appointment_note: string | null; // 次回予約メモ
+  internal_memo: string | null;      // スタッフ内部メモ
+  created_at: string;
+  updated_at: string;
+  // Joined
+  staff?: Profile;
+  customer?: Profile;
 }
 
 // Supabase Database type helper

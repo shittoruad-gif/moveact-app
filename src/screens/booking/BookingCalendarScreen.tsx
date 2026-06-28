@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS } from '../../lib/constants';
+import { COLORS, STORES } from '../../lib/constants';
 import { useStoreSelection } from '../../stores/storeSelectionStore';
 import { useAuthStore } from '../../stores/authStore';
 import { supabase } from '../../lib/supabase';
@@ -12,6 +12,12 @@ import type { TreatmentMenu, AppBooking } from '../../types/database';
 type Props = NativeStackScreenProps<BookingStackParamList, 'BookingCalendar'>;
 
 const BUFFER_MINUTES = 15;
+// すきま時間ブロック: 既存予約とのギャップが 30分超〜75分未満（=中途半端な空き）の枠は非表示。
+//   - 30分まで: 15+15分バッファ範囲内、OK
+//   - 75分以上: 最短メニュー（45分）+ 両側バッファ（30分）が収まる、別予約が入る可能性あり OK
+//   - 間: 別予約が入らない無駄な空き時間が発生するので非表示。
+const MAX_OK_GAP_MINUTES = 30;
+const MIN_FITTABLE_GAP_MINUTES = 75;
 const TIME_SLOTS = Array.from({ length: 20 }, (_, i) => {
   const h = Math.floor(i / 2) + 9; // 9:00 ~ 18:30
   const m = (i % 2) * 30;
@@ -24,8 +30,18 @@ interface TagPrice {
   tag: string | null;
 }
 
+// サーバー(get-available-slots)が返す予約可能枠（◎○△× と空きスタッフ数つき）
+interface AvailSlot {
+  time: string;
+  level: string;
+  freeStaff: number;
+}
+
 export function BookingCalendarScreen({ route, navigation }: Props) {
   const { selectedStore } = useStoreSelection();
+  // 予約フローでは「最初に選んだ店舗」を最優先で使う（誤店舗予約を防ぐ）
+  const storeId = route.params?.storeId ?? selectedStore;
+  const couponId = route.params?.couponId;
   const { profile } = useAuthStore();
   const [menus, setMenus] = useState<TreatmentMenu[]>([]);
   const [selectedMenu, setSelectedMenu] = useState<string>(route.params?.menuId ?? '');
@@ -33,9 +49,53 @@ export function BookingCalendarScreen({ route, navigation }: Props) {
   const [existingBookings, setExistingBookings] = useState<AppBooking[]>([]);
   const [tagPrices, setTagPrices] = useState<Map<string, TagPrice>>(new Map());
   const [loading, setLoading] = useState(true);
+  // サーバー(get-available-slots)が計算した予約可能枠（◎○△×・空きスタッフ数つき）
+  const [availableSlots, setAvailableSlots] = useState<AvailSlot[]>([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [isClosedDay, setIsClosedDay] = useState(false);
+  // スタッフ指名（null = 指名なし）
+  const [staffRoster, setStaffRoster] = useState<{ staff_id: string; full_name: string }[]>([]);
+  const [selectedStaff, setSelectedStaff] = useState<string | null>(null);
+  const [waitlistDone, setWaitlistDone] = useState(false);
 
-  useEffect(() => { fetchMenus(); }, []);
-  useEffect(() => { fetchBookings(); }, [selectedDate, selectedStore]);
+  useEffect(() => { fetchMenus(); fetchRoster(); }, []);
+  useEffect(() => { fetchRoster(); }, [storeId]);
+  // 空き枠はサーバー(get-available-slots)で一元計算する。
+  useEffect(() => { fetchSlots(); }, [selectedMenu, selectedDate, storeId, selectedStaff]);
+
+  async function fetchRoster() {
+    const { data } = await supabase
+      .from('public_staff_roster')
+      .select('staff_id, full_name')
+      .eq('store_id', storeId);
+    setStaffRoster((data as any[]) ?? []);
+  }
+
+  // 営業時間・定休日・既存予約・バッファ・すきま時間ブロックを統合した
+  // 予約可能枠をサーバーから取得する。
+  async function fetchSlots() {
+    if (!selectedMenu) { setAvailableSlots([]); return; }
+    setSlotsLoading(true);
+    setIsClosedDay(false);
+    setWaitlistDone(false);
+    try {
+      const dateStr = formatDate(selectedDate);
+      const { data, error } = await supabase.functions.invoke('get-available-slots', {
+        body: { storeId, menuId: selectedMenu, date: dateStr, staffId: selectedStaff ?? undefined },
+      });
+      if (error) throw error;
+      if (data?.isClosed) {
+        setIsClosedDay(true);
+        setAvailableSlots([]);
+      } else {
+        setAvailableSlots((data?.slots as AvailSlot[]) ?? []);
+      }
+    } catch {
+      setAvailableSlots([]);
+    } finally {
+      setSlotsLoading(false);
+    }
+  }
 
   async function fetchMenus() {
     const { data } = await supabase
@@ -58,13 +118,11 @@ export function BookingCalendarScreen({ route, navigation }: Props) {
       if (tpData && tpData.length > 0) {
         const priceMap = new Map<string, TagPrice>();
         for (const menu of menuList) {
-          // Find the first matching tag price for this menu (tag order matters)
-          for (const userTag of profile.tags) {
-            const match = tpData.find((tp: any) => tp.treatment_menu_id === menu.id && tp.tag === userTag);
-            if (match) {
-              priceMap.set(menu.id, { menuId: menu.id, price: match.price, tag: match.tag });
-              break;
-            }
+          // このメニューに該当する全タグ価格のうち最安値を採用（顧客に有利）
+          const matches = tpData.filter((tp: any) => tp.treatment_menu_id === menu.id);
+          if (matches.length > 0) {
+            const cheapest = matches.reduce((a: any, b: any) => (b.price < a.price ? b : a));
+            priceMap.set(menu.id, { menuId: menu.id, price: cheapest.price, tag: cheapest.tag });
           }
         }
         setTagPrices(priceMap);
@@ -79,7 +137,7 @@ export function BookingCalendarScreen({ route, navigation }: Props) {
     const { data } = await supabase
       .from('app_bookings')
       .select('*')
-      .eq('store_id', selectedStore)
+      .eq('store_id', storeId)
       .gte('starts_at', `${dateStr}T00:00:00`)
       .lte('starts_at', `${dateStr}T23:59:59`)
       .neq('status', 'cancelled');
@@ -126,10 +184,30 @@ export function BookingCalendarScreen({ route, navigation }: Props) {
       return false;
     }
 
+    // すきま時間ブロック: 隣接予約とのギャップが中途半端（30分超〜75分未満）なら非表示
+    if (hasAwkwardGap(slotStart, slotEnd, existingBookings)) {
+      return false;
+    }
+
     return true;
   }
 
   const isNewCustomer = route.params?.isNewCustomer ?? false;
+
+  // キャンセル待ちに登録（満席の日に空きが出たら通知）
+  async function registerWaitlist() {
+    if (!profile?.id || !selectedMenu) return;
+    const { error } = await supabase.from('booking_waitlist').insert({
+      user_id: profile.id,
+      store_id: storeId,
+      treatment_menu_id: selectedMenu,
+      staff_id: selectedStaff ?? null,
+      desired_date: formatDate(selectedDate),
+    });
+    if (error) { Alert.alert('エラー', '登録に失敗しました。時間をおいてお試しください。'); return; }
+    setWaitlistDone(true);
+    Alert.alert('登録しました', 'この日に空きが出ましたら、通知でお知らせします。');
+  }
 
   function handleSelectSlot(timeStr: string) {
     const [h, m] = timeStr.split(':').map(Number);
@@ -139,6 +217,9 @@ export function BookingCalendarScreen({ route, navigation }: Props) {
       menuId: selectedMenu,
       dateTime: dt.toISOString(),
       isNewCustomer,
+      staffId: selectedStaff ?? undefined,
+      storeId,
+      couponId,
     });
   }
 
@@ -154,6 +235,26 @@ export function BookingCalendarScreen({ route, navigation }: Props) {
 
   return (
     <ScrollView style={styles.container}>
+      {/* 選択中の店舗を常に明示（誤店舗予約の防止）。タップで店舗選択に戻れる */}
+      <View style={styles.storeBanner}>
+        <Ionicons name="storefront" size={18} color={COLORS.accent} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.storeBannerLabel}>ご予約の店舗</Text>
+          <Text style={styles.storeBannerName}>Moveact {STORES[storeId as keyof typeof STORES]?.name ?? ''}</Text>
+        </View>
+        <TouchableOpacity style={styles.storeChangeBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.storeChangeText}>変更</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* クーポンを最初に選んでいる場合の表示（割引は確認画面で適用） */}
+      {couponId && (
+        <View style={styles.couponBanner}>
+          <Ionicons name="ticket" size={15} color={COLORS.success} />
+          <Text style={styles.couponBannerText}>クーポン適用中（確認画面で割引が反映されます）</Text>
+        </View>
+      )}
+
       {/* Menu selection */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>メニューを選択</Text>
@@ -220,42 +321,81 @@ export function BookingCalendarScreen({ route, navigation }: Props) {
         </ScrollView>
       </View>
 
-      {/* Time slots */}
+      {/* スタッフ指名（任意）。指名なしの場合は空きスタッフを自動割当 */}
+      {staffRoster.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>スタッフ指名（任意）</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.menuScroll}>
+            <TouchableOpacity
+              style={[styles.staffChip, selectedStaff === null && styles.staffChipSelected]}
+              onPress={() => setSelectedStaff(null)}
+            >
+              <Text style={[styles.staffChipText, selectedStaff === null && styles.staffChipTextSelected]}>指名なし</Text>
+            </TouchableOpacity>
+            {staffRoster.map((s) => {
+              const isSel = selectedStaff === s.staff_id;
+              return (
+                <TouchableOpacity
+                  key={s.staff_id}
+                  style={[styles.staffChip, isSel && styles.staffChipSelected]}
+                  onPress={() => setSelectedStaff(s.staff_id)}
+                >
+                  <Text style={[styles.staffChipText, isSel && styles.staffChipTextSelected]}>{s.full_name}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* Time slots（サーバーの空き枠計算を使用：営業時間・定休日・既存予約・スタッフ不在・すきま時間ブロックを反映）*/}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>
-          時間を選択
-        </Text>
-        {/* Legend */}
-        <View style={styles.slotLegend}>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: COLORS.success }]} />
-            <Text style={styles.legendText}>空き</Text>
+        <Text style={styles.sectionTitle}>時間を選択</Text>
+        {slotsLoading ? (
+          <View style={styles.slotsLoading}>
+            <ActivityIndicator color={COLORS.accent} />
           </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: COLORS.textLight }]} />
-            <Text style={styles.legendText}>予約済</Text>
+        ) : isClosedDay ? (
+          <View style={styles.slotsNotice}>
+            <Ionicons name="moon-outline" size={18} color={COLORS.textLight} />
+            <Text style={styles.slotsNoticeText}>この日は定休日・お休みです</Text>
           </View>
-        </View>
-        <View style={styles.slotsGrid}>
-          {TIME_SLOTS.map((slot) => {
-            const available = isSlotAvailable(slot);
-            return (
-              <TouchableOpacity
-                key={slot}
-                style={[styles.slotButton, available ? styles.slotAvailable : styles.slotUnavailable]}
-                disabled={!available}
-                onPress={() => handleSelectSlot(slot)}
-              >
-                <Text style={[styles.slotText, available ? styles.slotTextAvailable : styles.slotTextUnavailable]}>
-                  {slot}
-                </Text>
-                <Text style={[styles.slotStatus, available ? styles.slotStatusAvailable : styles.slotStatusUnavailable]}>
-                  {available ? '空き' : '---'}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+        ) : availableSlots.length === 0 ? (
+          <View>
+            <View style={styles.slotsNotice}>
+              <Ionicons name="sad-outline" size={18} color={COLORS.textLight} />
+              <Text style={styles.slotsNoticeText}>空き枠がありません。別の日をお選びください</Text>
+            </View>
+            {/* キャンセル待ち登録（満席の日に空きが出たら通知） */}
+            <TouchableOpacity style={styles.waitlistBtn} onPress={registerWaitlist} disabled={waitlistDone}>
+              <Ionicons name={waitlistDone ? 'checkmark-circle' : 'notifications-outline'} size={18} color={waitlistDone ? COLORS.success : COLORS.accent} />
+              <Text style={[styles.waitlistText, waitlistDone && { color: COLORS.success }]}>
+                {waitlistDone ? 'キャンセル待ちに登録しました' : 'この日のキャンセル待ちに登録する'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <>
+            {/* ◎○△× の凡例（ホットペッパー式） */}
+            <View style={styles.slotLegend}>
+              <View style={styles.legendItem}><Text style={styles.legendMark}>◎</Text><Text style={styles.legendText}>空きあり</Text></View>
+              <View style={styles.legendItem}><Text style={styles.legendMark}>○</Text><Text style={styles.legendText}>残りわずか</Text></View>
+              <View style={styles.legendItem}><Text style={styles.legendMark}>△</Text><Text style={styles.legendText}>わずか</Text></View>
+            </View>
+            <View style={styles.slotsGrid}>
+              {availableSlots.map((slot) => (
+                <TouchableOpacity
+                  key={slot.time}
+                  style={[styles.slotButton, styles.slotAvailable]}
+                  onPress={() => handleSelectSlot(slot.time)}
+                >
+                  <Text style={[styles.slotText, styles.slotTextAvailable]}>{slot.time}</Text>
+                  <Text style={[styles.slotStatus, styles.slotStatusAvailable]}>{slot.level}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
       </View>
 
       <View style={{ height: 40 }} />
@@ -267,9 +407,73 @@ function formatDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// すきま時間ブロック判定
+// 候補スロット [slotStart, slotEnd] と既存予約から「中途半端な空き」が発生するか判定する。
+// - 候補スロットの直前/直後の既存予約を見つける
+// - そのギャップが MAX_OK_GAP_MINUTES 超〜 MIN_FITTABLE_GAP_MINUTES 未満なら awkward
+// - スロットの片側に予約がない場合（朝一・夜遅く）は片側だけチェック
+function hasAwkwardGap(
+  slotStart: Date,
+  slotEnd: Date,
+  bookings: AppBooking[],
+): boolean {
+  const slotStartMs = slotStart.getTime();
+  const slotEndMs = slotEnd.getTime();
+
+  let closestBeforeEndMs = -Infinity;
+  let closestAfterStartMs = Infinity;
+
+  for (const booking of bookings) {
+    const bStartMs = new Date(booking.starts_at).getTime();
+    const bEndMs = new Date(booking.ends_at).getTime();
+
+    if (bEndMs <= slotStartMs && bEndMs > closestBeforeEndMs) {
+      closestBeforeEndMs = bEndMs;
+    }
+    if (bStartMs >= slotEndMs && bStartMs < closestAfterStartMs) {
+      closestAfterStartMs = bStartMs;
+    }
+  }
+
+  if (closestBeforeEndMs !== -Infinity) {
+    const gapMin = (slotStartMs - closestBeforeEndMs) / 60000;
+    if (gapMin > MAX_OK_GAP_MINUTES && gapMin < MIN_FITTABLE_GAP_MINUTES) {
+      return true;
+    }
+  }
+
+  if (closestAfterStartMs !== Infinity) {
+    const gapMin = (closestAfterStartMs - slotEndMs) / 60000;
+    if (gapMin > MAX_OK_GAP_MINUTES && gapMin < MIN_FITTABLE_GAP_MINUTES) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  storeBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#FFF8F0', marginHorizontal: 16, marginTop: 16,
+    paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12,
+    borderWidth: 1, borderColor: COLORS.accentLight,
+  },
+  storeBannerLabel: { fontSize: 10, color: COLORS.textSecondary },
+  storeBannerName: { fontSize: 15, fontWeight: '700', color: COLORS.accent, marginTop: 1 },
+  storeChangeBtn: {
+    borderWidth: 1, borderColor: COLORS.accent, borderRadius: 16,
+    paddingHorizontal: 14, paddingVertical: 6,
+  },
+  storeChangeText: { fontSize: 12, fontWeight: '700', color: COLORS.accent },
+  couponBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 16, marginTop: 10, paddingVertical: 9, paddingHorizontal: 14,
+    backgroundColor: '#EEF6F0', borderRadius: 10,
+  },
+  couponBannerText: { fontSize: 12, color: COLORS.success, fontWeight: '600' },
   section: { paddingHorizontal: 16, marginTop: 20 },
   sectionTitle: { fontSize: 13, fontWeight: '600', color: COLORS.textSecondary, marginBottom: 10 },
   bufferNote: { fontSize: 11, fontWeight: '400', color: COLORS.textLight },
@@ -325,12 +529,32 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
   },
+  slotsLoading: { paddingVertical: 24, alignItems: 'center' },
+  slotsNotice: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: COLORS.surface, padding: 16, borderRadius: 10,
+  },
+  slotsNoticeText: { fontSize: 13, color: COLORS.textSecondary, flex: 1 },
+  waitlistBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginTop: 10, paddingVertical: 13, borderRadius: 10,
+    borderWidth: 1.5, borderColor: COLORS.accent, backgroundColor: '#FFF8F0',
+  },
+  waitlistText: { fontSize: 13, fontWeight: '700', color: COLORS.accent },
   slotLegend: {
     flexDirection: 'row', gap: 16, marginBottom: 10,
   },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendMark: { fontSize: 13, fontWeight: '700', color: COLORS.success },
   legendText: { fontSize: 11, color: COLORS.textSecondary },
+  staffChip: {
+    paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20,
+    backgroundColor: COLORS.surface, borderWidth: 1.5, borderColor: COLORS.border,
+  },
+  staffChipSelected: { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
+  staffChipText: { fontSize: 13, fontWeight: '600', color: COLORS.text },
+  staffChipTextSelected: { color: '#FFF' },
   slotButton: {
     width: '23%',
     paddingVertical: 10,

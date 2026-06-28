@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, STORES } from '../../lib/constants';
 import { Button } from '../../components/ui/Button';
+import { CancellationPolicyNotice } from '../../components/CancellationPolicyNotice';
 import { useStoreSelection } from '../../stores/storeSelectionStore';
 import { supabase } from '../../lib/supabase';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -69,6 +70,10 @@ export function BookingCompleteScreen({ route, navigation }: Props) {
             </View>
           </View>
 
+          <View style={styles.policyWrap}>
+            <CancellationPolicyNotice variant="banner" />
+          </View>
+
           <View style={styles.actions}>
             <Button
               title="カウンセリングシートを記入する"
@@ -96,6 +101,10 @@ export function BookingCompleteScreen({ route, navigation }: Props) {
             ご予約時間の5分前までにお越しください。{'\n'}
             通知にてリマインダーをお送りします。
           </Text>
+
+          <View style={styles.policyWrap}>
+            <CancellationPolicyNotice variant="banner" />
+          </View>
 
           <View style={styles.actions}>
             <Button
@@ -125,6 +134,7 @@ const styles = StyleSheet.create({
     padding: 32,
   },
   iconWrap: { marginBottom: 20 },
+  policyWrap: { width: '100%', marginTop: 16, marginBottom: 4 },
   title: {
     fontSize: 20,
     fontWeight: '700',

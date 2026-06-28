@@ -2,8 +2,7 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ProductListScreen } from '../screens/shop/ProductListScreen';
 import { ProductDetailScreen } from '../screens/shop/ProductDetailScreen';
-import { CartScreen } from '../screens/shop/CartScreen';
-import { CheckoutScreen } from '../screens/shop/CheckoutScreen';
+import { ProductCheckoutScreen } from '../screens/shop/ProductCheckoutScreen';
 import { OrderCompleteScreen } from '../screens/shop/OrderCompleteScreen';
 import { COLORS } from '../lib/constants';
 import type { ShopStackParamList } from '../types/navigation';
@@ -22,8 +21,7 @@ export function ShopStack() {
     >
       <Stack.Screen name="ProductList" component={ProductListScreen} options={{ title: 'ショップ' }} />
       <Stack.Screen name="ProductDetail" component={ProductDetailScreen} options={{ title: '商品詳細' }} />
-      <Stack.Screen name="Cart" component={CartScreen} options={{ title: 'カート' }} />
-      <Stack.Screen name="Checkout" component={CheckoutScreen} options={{ title: '注文確認' }} />
+      <Stack.Screen name="ProductCheckout" component={ProductCheckoutScreen} options={{ title: 'お支払い' }} />
       <Stack.Screen name="OrderComplete" component={OrderCompleteScreen} options={{ title: '注文完了', headerBackVisible: false }} />
     </Stack.Navigator>
   );
