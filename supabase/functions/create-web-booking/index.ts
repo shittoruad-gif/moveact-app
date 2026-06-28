@@ -262,6 +262,7 @@ serve(async (req) => {
         .from('payment_links').select('url')
         .eq('is_active', true).eq('amount', depositAmount)
         .eq('is_subscription', false)   // 定期(サブスク)リンクは前金照合の対象外（毎月課金への誤登録防止）
+        .eq('auto_match', true)         // 学割・カタログ用リンクは自動案内しない（手動共有のみ）
         .or(`store_id.eq.${storeId},store_id.is.null`)
         .order('store_id', { ascending: true, nullsFirst: false })
         .limit(1).maybeSingle();
