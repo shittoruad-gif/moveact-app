@@ -23,7 +23,7 @@ export function BookingFlow() {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [date, setDate] = useState<string | null>(null);
   const [time, setTime] = useState<string | null>(null);
-  const [customer, setCustomer] = useState<CustomerInfo>({ name: '', phone: '', email: '', request: '', consent: false });
+  const [customer, setCustomer] = useState<CustomerInfo>({ name: '', phone: '', email: '', request: '', consent: false, isStudent: false });
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -35,7 +35,7 @@ export function BookingFlow() {
     let cancelled = false;
     setPageData(null); setLoadError(false); setStep('menu');
     setStoreId(null); setMenu(null); setDate(null); setTime(null);
-    setCustomer({ name: '', phone: '', email: '', request: '', consent: false });
+    setCustomer({ name: '', phone: '', email: '', request: '', consent: false, isStudent: false });
     setResult(null); setSubmitError(null); setPaid(false);
     getBookingPageData(slug)
       .then((d) => {
@@ -88,6 +88,7 @@ export function BookingFlow() {
         guestPhone: customer.phone.trim(),
         guestEmail: customer.email.trim() || undefined,
         request: customer.request.trim() || undefined,
+        isStudent: customer.isStudent,
       });
     } catch {
       setSubmitting(false);

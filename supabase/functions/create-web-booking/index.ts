@@ -249,20 +249,30 @@ serve(async (req) => {
     }
 
     // --- 前金（初回のみ）---
+    //   通常: 前金=メニュー価格（初回対象メニューは3,980/5,980想定。自動案内はその金額のみ）。
+    //   学割: 学生選択時はメニュー価格に対応する学割価格で請求（下記の対応表）。
+    const isStudent = b.isStudent === true;
+    const STUDENT_DEPOSIT: Record<number, number> = { 3980: 3500, 5980: 4400 };
     const depositRequired = isFirstVisit;
-    const depositAmount = depositRequired ? (menu.price as number) : null;
+    const menuPrice = menu.price as number;
+    let depositAmount: number | null = null;
+    if (depositRequired) {
+      depositAmount = isStudent ? (STUDENT_DEPOSIT[menuPrice] ?? menuPrice) : menuPrice;
+    }
     const depositStatus = depositRequired ? 'pending' : 'none';
 
     // --- 前金リンク（Airペイの金額固定リンク）を【挿入前に】照合 ---
     //   リンクが有る初回客のみ「事前決済が完了するまで確定しない」仮押さえにする。
     //   リンクが無い初回客は従来どおりスタッフが個別連絡（自動失効はさせない）。
+    //   学生=学割リンク(is_student)、通常=自動案内リンク(auto_match) を金額で照合。
     let paymentUrl: string | null = null;
     if (depositRequired && depositAmount) {
-      const { data: link } = await supabase
+      let q = supabase
         .from('payment_links').select('url')
         .eq('is_active', true).eq('amount', depositAmount)
-        .eq('is_subscription', false)   // 定期(サブスク)リンクは前金照合の対象外（毎月課金への誤登録防止）
-        .eq('auto_match', true)         // 学割・カタログ用リンクは自動案内しない（手動共有のみ）
+        .eq('is_subscription', false);   // 定期(サブスク)リンクは前金照合の対象外（毎月課金への誤登録防止）
+      q = isStudent ? q.eq('is_student', true) : q.eq('auto_match', true);
+      const { data: link } = await q
         .or(`store_id.eq.${storeId},store_id.is.null`)
         .order('store_id', { ascending: true, nullsFirst: false })
         .limit(1).maybeSingle();

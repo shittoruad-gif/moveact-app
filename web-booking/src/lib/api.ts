@@ -56,6 +56,7 @@ export interface CreateBookingInput {
   guestPhone: string;
   guestEmail?: string;
   request?: string;
+  isStudent?: boolean;   // 学割（学生割引）希望
 }
 
 export interface CreateBookingResult {
