@@ -17,6 +17,7 @@
 // =====================================================
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { sendConfirmationEmail } from '../_shared/email.ts';
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -70,10 +71,10 @@ serve(async (req) => {
     // 念のため期限切れ仮押さえをスイープ（pg_cron不在時の保険）
     await supabase.rpc('cancel_expired_deposit_holds');
 
-    // 対象予約を取得
+    // 対象予約を取得（メール送信用に guest_email 等も含む）
     const { data: bk, error: selErr } = await supabase
       .from('app_bookings')
-      .select('id, status, deposit_status, deposit_amount, hold_expires_at')
+      .select('id, status, deposit_status, deposit_amount, hold_expires_at, guest_name, guest_email, starts_at, store_id, treatment_menu_id, confirmation_email_sent_at')
       .eq('id', bookingId)
       .maybeSingle();
     if (selErr) {
@@ -127,6 +128,29 @@ serve(async (req) => {
 
     // スタッフグループへ予約確定を通知
     await notifyStaff(bookingId);
+
+    // 確認メール（事前決済完了 = 予約確定）。未送信かつメールありの場合のみ。
+    if (bk.guest_email && !bk.confirmation_email_sent_at) {
+      const { data: menuRow } = await supabase
+        .from('treatment_menus').select('name, duration_minutes').eq('id', bk.treatment_menu_id).maybeSingle();
+      if (menuRow) {
+        const startsJst = new Date(new Date(bk.starts_at).getTime() + 9 * 3600_000);
+        const date = startsJst.toISOString().slice(0, 10);
+        const time = `${String(startsJst.getUTCHours()).padStart(2, '0')}:${String(startsJst.getUTCMinutes()).padStart(2, '0')}`;
+        sendConfirmationEmail({
+          guestName: bk.guest_name,
+          guestEmail: bk.guest_email,
+          date, time,
+          menuName: menuRow.name,
+          durationMinutes: menuRow.duration_minutes,
+          storeId: bk.store_id,
+        }).then(() =>
+          supabase.from('app_bookings')
+            .update({ confirmation_email_sent_at: new Date().toISOString() })
+            .eq('id', bookingId).then(() => {})
+        ).catch(() => {});
+      }
+    }
 
     return json({ ok: true });
   } catch (e) {

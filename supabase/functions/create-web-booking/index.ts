@@ -15,6 +15,7 @@
 // =====================================================
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { sendConfirmationEmail } from '../_shared/email.ts';
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -342,6 +343,24 @@ serve(async (req) => {
         });
       } catch (e) {
         console.error('notify-staff-group failed:', (e as Error).message);
+      }
+
+      // 確認メール: 前金ゲートなし（再来店 or 前金リンク無し）の確定予約のみ送る。
+      // 前金ゲートあり（heldForPayment）は confirm-web-booking で決済確定後に送る。
+      if (guestEmail) {
+        const jstBase = new Date(base + 9 * 3600_000);  // UTC→JST
+        const jstTime = `${String(Math.floor(slotStart / 60)).padStart(2, '0')}:${String(slotStart % 60).padStart(2, '0')}`;
+        sendConfirmationEmail({
+          guestName, guestEmail, date, time: jstTime,
+          menuName: menu.name as string,
+          durationMinutes: duration,
+          storeId,
+        }).then(() =>
+          supabase.from('app_bookings')
+            .update({ confirmation_email_sent_at: new Date().toISOString() })
+            .eq('id', inserted!.id).then(() => {})
+        ).catch(() => {});
+        void jstBase; // suppress unused warning
       }
     }
 
