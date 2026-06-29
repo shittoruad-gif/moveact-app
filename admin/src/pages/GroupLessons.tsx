@@ -64,7 +64,7 @@ export function GroupLessons() {
         <h1 style={{ fontSize: 24, fontWeight: 700 }}>グループレッスン管理</h1>
         <button
           onClick={() => setShowForm(!showForm)}
-          style={{ background: '#1B3A5C', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', fontWeight: 600, cursor: 'pointer' }}
+          style={{ background: '#C3003A', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', fontWeight: 600, cursor: 'pointer' }}
         >
           + レッスン追加
         </button>
@@ -113,7 +113,7 @@ export function GroupLessons() {
 
       <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 8, overflow: 'hidden' }}>
         <thead>
-          <tr style={{ background: '#1B3A5C', color: '#fff' }}>
+          <tr style={{ background: '#C3003A', color: '#fff' }}>
             <th style={thStyle}>店舗</th>
             <th style={thStyle}>レッスン名</th>
             <th style={thStyle}>インストラクター</th>

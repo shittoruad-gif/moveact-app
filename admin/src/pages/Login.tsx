@@ -20,9 +20,9 @@ export function Login() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F5F1EC' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F5F5F7' }}>
       <form onSubmit={handleLogin} style={{ background: '#fff', borderRadius: 16, padding: 40, width: 400, boxShadow: '0 2px 12px rgba(0,0,0,0.1)' }}>
-        <h1 style={{ fontSize: 28, fontWeight: 700, color: '#1B3A5C', textAlign: 'center', marginBottom: 8 }}>Moveact</h1>
+        <h1 style={{ fontSize: 28, fontWeight: 700, color: '#C3003A', textAlign: 'center', marginBottom: 8 }}>Moveact</h1>
         <p style={{ textAlign: 'center', color: '#666', marginBottom: 32, fontSize: 14 }}>管理画面ログイン</p>
 
         {error && (
@@ -59,7 +59,7 @@ export function Login() {
           style={{
             width: '100%',
             padding: 14,
-            background: '#1B3A5C',
+            background: '#C3003A',
             color: '#fff',
             border: 'none',
             borderRadius: 8,

@@ -41,7 +41,7 @@ export function Dashboard() {
   }
 
   const cards = [
-    { label: '本日の予約', value: stats.todayBookings, color: '#1B3A5C' },
+    { label: '本日の予約', value: stats.todayBookings, color: '#C3003A' },
     { label: '有効な回数券', value: stats.activeTickets, color: '#E8B44B' },
     { label: '未処理注文', value: stats.pendingOrders, color: '#F57C00' },
     { label: 'アクティブサブスク', value: stats.activeSubscriptions, color: '#388E3C' },

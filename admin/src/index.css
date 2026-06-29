@@ -1,4 +1,28 @@
 :root {
+  /* ===== Timeline (予約表) palette — admin original HEX, no third-party copy ===== */
+  --color-primary: #E60044;
+  --color-primary-dark: #C3003A;
+  --color-primary-light: #FCE4EB;
+  --color-primary-tint: #FFF0F4;
+  --color-bg: #FFFFFF;
+  --color-bg-sub: #F5F5F7;
+  --color-bg-muted: #FAFAFB;
+  --color-text: #1A1A1A;
+  --color-text-sub: #555555;
+  --color-text-mute: #999999;
+  --color-border: #E0E0E0;
+  --color-border-strong: #CCCCCC;
+  --color-sat: #1769C0;
+  --color-sun: #D32F4A;
+  --status-new: #E60044;
+  --status-new-bg: #FCE4EB;
+  --status-repeat: #2D6FB5;
+  --status-repeat-bg: #E4EEF8;
+  --status-tentative: #E8920C;
+  --status-done: #7A7A7A;
+  --status-cancel: #C9C9C9;
+  --tl-font: "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", Meiryo, system-ui, sans-serif;
+
   --text: #6b6375;
   --text-h: #08060d;
   --bg: #fff;

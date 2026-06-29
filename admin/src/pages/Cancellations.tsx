@@ -82,7 +82,7 @@ export function Cancellations() {
 
       <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 8, overflow: 'hidden' }}>
         <thead>
-          <tr style={{ background: '#1B3A5C', color: '#fff' }}>
+          <tr style={{ background: '#C3003A', color: '#fff' }}>
             <th style={thStyle}>顧客名</th>
             <th style={thStyle}>電話番号</th>
             <th style={thStyle}>レッスン</th>
