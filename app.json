@@ -3,6 +3,7 @@
     "name": "Moveact",
     "slug": "moveact-app",
     "version": "1.1.0",
+    "scheme": "moveact",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -15,7 +16,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "net.moveact.app",
       "infoPlist": {
-        "NSCameraUsageDescription": "商品画像の撮影に使用します",
+        "NSCameraUsageDescription": "商品画像やカルテの施術前後写真の撮影に使用します",
+        "NSPhotoLibraryUsageDescription": "商品画像やカルテの施術前後写真の選択に使用します",
+        "NSPhotoLibraryAddUsageDescription": "領収書や画像の保存に使用します",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -39,7 +42,15 @@
           "icon": "./assets/icon.png",
           "color": "#C4956A"
         }
-      ]
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "商品画像やカルテの施術前後写真の選択に使用します",
+          "cameraPermission": "商品画像やカルテの施術前後写真の撮影に使用します"
+        }
+      ],
+      "expo-web-browser"
     ],
     "extra": {
       "eas": {

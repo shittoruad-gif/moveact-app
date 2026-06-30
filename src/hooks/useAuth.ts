@@ -47,8 +47,13 @@ export function useAuth() {
     setLoading(false);
   }
 
-  async function signInWithPhone(phone: string) {
-    const { error } = await supabase.auth.signInWithOtp({ phone });
+  async function signInWithPhone(
+    phone: string,
+    options?: { shouldCreateUser?: boolean; data?: Record<string, unknown> },
+  ) {
+    // phone は E.164（+81…）で渡す。options.data は新規作成時に user_metadata となり
+    // handle_new_user トリガが profiles.full_name 等に反映する。
+    const { error } = await supabase.auth.signInWithOtp({ phone, options });
     return { error };
   }
 
