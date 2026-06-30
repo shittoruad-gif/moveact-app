@@ -1,0 +1,39 @@
+project_id = "khsriogicdjdyivshplc"
+
+# =====================================================
+# Edge Function の JWT 検証設定（永続化）
+# これが無いと標準 deploy で公開関数が全て 401 になり、
+# 公開Web予約・LINEログイン・各Webhookが本番で停止する（監査 C-2/H-3）。
+# verify_jwt=false の関数は、内部で自前の検証（公開関数=入力検証/レート制限、
+# Webhook=署名検証）を行う前提。
+# =====================================================
+
+# --- 公開ネット予約フロント（apikey/JWT を送らない設計）---
+[functions.get-booking-page-data]
+verify_jwt = false
+
+[functions.get-available-slots]
+verify_jwt = false
+
+[functions.create-web-booking]
+verify_jwt = false
+
+[functions.confirm-web-booking]
+verify_jwt = false
+
+[functions.cancel-web-booking]
+verify_jwt = false
+
+# --- LINEログイン（アプリから未認証で呼ぶ）---
+[functions.line-auth]
+verify_jwt = false
+
+# --- 外部Webhook（各々が独自署名で検証）---
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.line-webhook]
+verify_jwt = false
+
+[functions.paypay-webhook]
+verify_jwt = false

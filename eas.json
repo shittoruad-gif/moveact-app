@@ -7,15 +7,24 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_LINE_LOGIN_CHANNEL_ID": "2010547249"
+      },
       "ios": {
         "simulator": true
       }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_LINE_LOGIN_CHANNEL_ID": "2010547249"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_LINE_LOGIN_CHANNEL_ID": "2010547249"
+      }
     }
   },
   "submit": {
