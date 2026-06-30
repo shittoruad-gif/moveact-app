@@ -28,6 +28,10 @@ verify_jwt = false
 [functions.line-auth]
 verify_jwt = false
 
+# --- 前日リマインドcron（pg_cronが認証ヘッダ無しで叩く・監査H-4）---
+[functions.send-daily-reminders]
+verify_jwt = false
+
 # --- 外部Webhook（各々が独自署名で検証）---
 [functions.stripe-webhook]
 verify_jwt = false

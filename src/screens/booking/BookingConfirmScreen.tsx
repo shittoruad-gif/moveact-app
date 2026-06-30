@@ -107,7 +107,7 @@ export function BookingConfirmScreen({ route, navigation }: Props) {
         .select('staff_id, starts_at, ends_at, buffer_before, buffer_after')
         .eq('store_id', storeId).neq('status', 'cancelled')
         .gte('starts_at', dayStart.toISOString()).lte('starts_at', dayEnd.toISOString()),
-      supabase.from('staff_unavailability')
+      supabase.from('public_staff_unavailability')
         .select('staff_id, starts_at, ends_at')
         .eq('store_id', storeId)
         .lte('starts_at', dayEnd.toISOString()).gte('ends_at', dayStart.toISOString()),
