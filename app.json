@@ -15,6 +15,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "net.moveact.app",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "NSCameraUsageDescription": "商品画像やカルテの施術前後写真の撮影に使用します",
         "NSPhotoLibraryUsageDescription": "商品画像やカルテの施術前後写真の選択に使用します",
