@@ -25,6 +25,12 @@ function isoDay(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
+const CHARGE_CONFIRM: Record<'ticket' | 'stripe' | 'waive', string> = {
+  ticket: 'この予約をキャンセルし、回数券を1回分消化します。よろしいですか？',
+  stripe: 'この予約をキャンセルし、Stripeでキャンセル料を請求します。よろしいですか？',
+  waive: 'この予約をキャンセルします。キャンセル料は請求しません（免除）。よろしいですか？',
+};
+
 export function Cancellations() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [processing, setProcessing] = useState<string | null>(null);
@@ -57,6 +63,7 @@ export function Cancellations() {
   }
 
   async function handleCancel(bookingId: string, chargeType: 'ticket' | 'stripe' | 'waive') {
+    if (!window.confirm(CHARGE_CONFIRM[chargeType])) return;
     setProcessing(bookingId);
     const { data: { session } } = await supabase.auth.getSession();
 
@@ -87,106 +94,84 @@ export function Cancellations() {
   }
 
   return (
-    <div>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 24 }}>当日キャンセル管理</h1>
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h2 className="page-title">当日キャンセル管理</h2>
+          <p className="page-help">本日実施予定のレッスン予約に対して、当日キャンセルの処理（回数券消化・Stripe請求・免除）ができます。</p>
+        </div>
+      </div>
 
-      <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 8, overflow: 'hidden' }}>
-        <thead>
-          <tr style={{ background: '#C3003A', color: '#fff' }}>
-            <th style={thStyle}>顧客名</th>
-            <th style={thStyle}>電話番号</th>
-            <th style={thStyle}>レッスン</th>
-            <th style={thStyle}>実施日時</th>
-            <th style={thStyle}>料金</th>
-            <th style={thStyle}>ステータス</th>
-            <th style={thStyle}>キャンセル処理</th>
-          </tr>
-        </thead>
-        <tbody>
-          {bookings.map((b) => (
-            <tr key={b.id} style={{ borderBottom: '1px solid #eee' }}>
-              <td style={tdStyle}>{(b.profile as any)?.full_name ?? '-'}</td>
-              <td style={tdStyle}>{(b.profile as any)?.phone ?? '-'}</td>
-              <td style={tdStyle}>{(b.group_lesson as any)?.title ?? '-'}</td>
-              <td style={tdStyle}>
-                {(b.group_lesson as any)?.starts_at
-                  ? new Date((b.group_lesson as any).starts_at).toLocaleString('ja-JP', {
-                      month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit',
-                    })
-                  : '-'}
-              </td>
-              <td style={tdStyle}>¥{((b.group_lesson as any)?.price ?? 0).toLocaleString()}</td>
-              <td style={tdStyle}>
-                <span style={{
-                  padding: '2px 8px',
-                  borderRadius: 4,
-                  fontSize: 12,
-                  background: b.status === 'confirmed' ? '#E8F5E9' : '#FFEBEE',
-                  color: b.status === 'confirmed' ? '#388E3C' : '#D32F2F',
-                }}>
-                  {b.status === 'confirmed' ? '確定' : b.status}
-                </span>
-              </td>
-              <td style={tdStyle}>
-                {b.status === 'confirmed' && (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button
-                      onClick={() => handleCancel(b.id, 'ticket')}
-                      disabled={processing === b.id}
-                      style={{ ...btnStyle, background: '#E8B44B' }}
-                    >
-                      回数券消化
-                    </button>
-                    <button
-                      onClick={() => handleCancel(b.id, 'stripe')}
-                      disabled={processing === b.id}
-                      style={{ ...btnStyle, background: '#D32F2F' }}
-                    >
-                      Stripe請求
-                    </button>
-                    <button
-                      onClick={() => handleCancel(b.id, 'waive')}
-                      disabled={processing === b.id}
-                      style={{ ...btnStyle, background: '#999' }}
-                    >
-                      免除
-                    </button>
-                  </div>
-                )}
-              </td>
-            </tr>
-          ))}
-          {bookings.length === 0 && (
-            <tr>
-              <td colSpan={7} style={{ ...tdStyle, textAlign: 'center', color: '#999' }}>
-                本日実施の予約はありません
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+      <div className="card">
+        {bookings.length === 0 ? (
+          <div className="empty">
+            本日実施の予約はありません。当日キャンセルの処理が必要な予約が入ると、ここに表示されます。
+          </div>
+        ) : (
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>実施日時</th>
+                <th>顧客名</th>
+                <th>電話番号</th>
+                <th>レッスン</th>
+                <th>料金</th>
+                <th>ステータス</th>
+                <th>キャンセル処理</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bookings.map((b) => (
+                <tr key={b.id}>
+                  <td style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                    {(b.group_lesson as any)?.starts_at
+                      ? new Date((b.group_lesson as any).starts_at).toLocaleString('ja-JP', {
+                          month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit',
+                        })
+                      : '-'}
+                  </td>
+                  <td>{(b.profile as any)?.full_name ?? '-'}</td>
+                  <td style={{ fontVariantNumeric: 'tabular-nums' }}>{(b.profile as any)?.phone ?? '-'}</td>
+                  <td>{(b.group_lesson as any)?.title ?? '-'}</td>
+                  <td style={{ fontVariantNumeric: 'tabular-nums' }}>¥{((b.group_lesson as any)?.price ?? 0).toLocaleString()}</td>
+                  <td>
+                    {b.status === 'confirmed'
+                      ? <span className="badge badge-green" title="確定済みの予約です">確定</span>
+                      : <span className="badge badge-gray">{b.status}</span>}
+                  </td>
+                  <td>
+                    {b.status === 'confirmed' && (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => handleCancel(b.id, 'ticket')}
+                          disabled={processing === b.id}
+                          title="キャンセルし、回数券を1回分消化します"
+                        >{processing === b.id ? '処理中…' : '回数券消化'}</button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-danger"
+                          onClick={() => handleCancel(b.id, 'stripe')}
+                          disabled={processing === b.id}
+                          title="キャンセルし、Stripeでキャンセル料を請求します"
+                        >Stripe請求</button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => handleCancel(b.id, 'waive')}
+                          disabled={processing === b.id}
+                          title="キャンセル料を請求せずにキャンセル処理します"
+                        >免除</button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
-
-const thStyle: React.CSSProperties = {
-  padding: '12px 16px',
-  textAlign: 'left',
-  fontSize: 13,
-  fontWeight: 600,
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '12px 16px',
-  fontSize: 14,
-};
-
-const btnStyle: React.CSSProperties = {
-  color: '#fff',
-  border: 'none',
-  borderRadius: 6,
-  padding: '6px 12px',
-  fontSize: 12,
-  fontWeight: 600,
-  cursor: 'pointer',
-};

@@ -5,13 +5,6 @@ type StoreId = 'tamashima' | 'kanamitsu';
 
 const STORE_NAMES: Record<StoreId, string> = { tamashima: '玉島店', kanamitsu: '金光店' };
 
-const STATUS_MAP: Record<string, { label: string; color: string; bg: string }> = {
-  confirmed:  { label: '確定',     color: '#1B7A3C', bg: '#E8F5E9' },
-  completed:  { label: '完了',     color: '#555',    bg: '#f0f0f0' },
-  cancelled:  { label: 'キャンセル', color: '#999',   bg: '#f5f5f5' },
-  no_show:    { label: '無断欠席', color: '#C62828', bg: '#FFEBEE' },
-};
-
 interface Booking {
   id: string;
   store_id: string;
@@ -79,7 +72,7 @@ export function Bookings() {
   useEffect(() => { fetchBookings(); }, [fetchBookings]);
 
   const handleCancel = async (id: string) => {
-    if (!window.confirm('この予約をキャンセルしますか？')) return;
+    if (!window.confirm('この予約をキャンセルします。よろしいですか？')) return;
     setCancelling(id);
     const { error } = await supabase
       .from('app_bookings')
@@ -90,8 +83,8 @@ export function Bookings() {
   };
 
   const handleStatusChange = async (id: string, status: 'completed' | 'no_show') => {
-    const label = status === 'completed' ? '来店完了' : '無断欠席';
-    if (!window.confirm(`この予約を「${label}」にしますか？`)) return;
+    const label = status === 'completed' ? '来店完了' : '無断キャンセル';
+    if (!window.confirm(`この予約を「${label}」として記録します。よろしいですか？`)) return;
     setUpdating(id);
     const { error } = await supabase
       .from('app_bookings')
@@ -118,98 +111,90 @@ export function Bookings() {
   const pendingCount = bookings.filter(b => b.deposit_status === 'pending' && b.status !== 'cancelled').length;
 
   return (
-    <div>
-      {/* タイトル行 */}
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 20, gap: 12 }}>
-        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: '#C3003A' }}>予約管理</h2>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
-          <button
-            onClick={() => setPendingOnly(p => !p)}
-            style={{
-              padding: '5px 14px', borderRadius: 20, cursor: 'pointer',
-              fontSize: 13, fontWeight: 700, marginRight: 8,
-              border: '1px solid #E8590C',
-              background: pendingOnly ? '#E8590C' : '#fff',
-              color: pendingOnly ? '#fff' : '#E8590C',
-              transition: 'all 0.15s',
-            }}
-          >⚠ 前金未確認のみ{pendingCount > 0 ? `（${pendingCount}）` : ''}</button>
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h2 className="page-title">予約管理</h2>
+          <p className="page-help">本日の来店予定を確認し、来店・無断キャンセルの記録と前金の入金確認ができます。</p>
+        </div>
+      </div>
+
+      {/* フィルタ */}
+      <div className="toolbar" style={{ marginBottom: 16, flexWrap: 'wrap' }}>
+        <div className="seg" title="表示する店舗を切り替えます">
           {(['all', 'tamashima', 'kanamitsu'] as const).map(s => (
             <button
               key={s}
+              type="button"
+              className={`seg-btn${storeFilter === s ? ' seg-btn--active' : ''}`}
               onClick={() => setStoreFilter(s)}
-              style={{
-                padding: '5px 14px', borderRadius: 20, border: 'none', cursor: 'pointer',
-                fontSize: 13, fontWeight: storeFilter === s ? 700 : 400,
-                background: storeFilter === s ? '#C3003A' : '#EAEAEC',
-                color: storeFilter === s ? '#fff' : '#555',
-                transition: 'all 0.15s',
-              }}
             >{s === 'all' ? '全店' : STORE_NAMES[s as StoreId]}</button>
           ))}
+        </div>
+        <div className="seg" style={{ marginLeft: 'auto' }}>
+          <button
+            type="button"
+            className={`seg-btn${pendingOnly ? ' seg-btn--active' : ''}`}
+            onClick={() => setPendingOnly(p => !p)}
+            title="前金の入金確認が済んでいない予約だけを表示します"
+          >前金未確認のみ表示{pendingCount > 0 ? `（${pendingCount}）` : ''}</button>
         </div>
       </div>
 
       {/* 日付ナビゲーション */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 24,
-        background: '#fff', padding: '12px 20px', borderRadius: 12,
-        boxShadow: '0 1px 6px rgba(0,0,0,0.07)',
-      }}>
-        <button onClick={() => moveDate(-1)} style={navBtn}>‹ 前日</button>
+      <div className="card card-pad day-nav" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+        <button type="button" className="btn btn-sm" onClick={() => moveDate(-1)} title="前の日の予約を表示します">前日</button>
         <button
+          type="button"
+          className={`btn btn-sm${isToday ? ' btn-primary' : ''}`}
           onClick={() => setDate(todayDate)}
-          style={{ ...navBtn, background: isToday ? '#C3003A' : '#EAEAEC', color: isToday ? '#fff' : '#555' }}
+          title="今日の予約を表示します"
         >今日</button>
-        <span style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 17, color: '#C3003A' }}>
+        <span style={{ flex: 1, textAlign: 'center', fontWeight: 600, fontSize: 15 }}>
           {fmtDate(date)}
         </span>
-        <span style={{ fontSize: 13, color: '#999' }}>{active.length}件</span>
-        <button onClick={() => moveDate(1)} style={navBtn}>翌日 ›</button>
+        <span style={{ fontSize: 13, color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>{active.length}件</span>
+        <button type="button" className="btn btn-sm" onClick={() => moveDate(1)} title="次の日の予約を表示します">翌日</button>
       </div>
 
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 60, color: '#aaa' }}>読み込み中…</div>
+        <div className="card card-pad" style={{ textAlign: 'center', color: 'var(--sub)' }}>読み込み中…</div>
       ) : (
         <>
-          {/* ① 初回・新規（上部に強調表示） */}
+          {/* ① 初回・新規 */}
           {firstVisit.length > 0 && (
-            <SectionBlock
-              title={`🆕 初回・新規のお客様（${firstVisit.length}件）`}
-              borderColor="#E84C4C"
-              headerBg="#FFF5F5"
-            >
+            <BookingSection title={`初回・新規のお客様（${firstVisit.length}件）`}>
               {firstVisit.map(b => (
-                <BookingCard key={b.id} b={b} onCancel={handleCancel} onStatusChange={handleStatusChange} cancelling={cancelling} updating={updating} />
+                <BookingRow key={b.id} b={b} onCancel={handleCancel} onStatusChange={handleStatusChange} cancelling={cancelling} updating={updating} />
               ))}
-            </SectionBlock>
+            </BookingSection>
           )}
 
           {/* ② 通常予約 */}
           {returning.length > 0 && (
-            <SectionBlock
-              title={`📋 本日の予約（${returning.length}件）`}
-              borderColor="#C3003A"
-              headerBg="#FCEFF3"
-            >
+            <BookingSection title={`本日の予約（${returning.length}件）`}>
               {returning.map(b => (
-                <BookingCard key={b.id} b={b} onCancel={handleCancel} onStatusChange={handleStatusChange} cancelling={cancelling} updating={updating} />
+                <BookingRow key={b.id} b={b} onCancel={handleCancel} onStatusChange={handleStatusChange} cancelling={cancelling} updating={updating} />
               ))}
-            </SectionBlock>
+            </BookingSection>
           )}
 
           {/* ③ キャンセル済み */}
           {cancelled.length > 0 && (
-            <SectionBlock title={`キャンセル済み（${cancelled.length}件）`} borderColor="#bbb" headerBg="#f8f8f8">
+            <BookingSection title={`キャンセル（${cancelled.length}件）`}>
               {cancelled.map(b => (
-                <BookingCard key={b.id} b={b} onCancel={() => {}} onStatusChange={() => {}} cancelling={null} updating={null} showCancel={false} />
+                <BookingRow key={b.id} b={b} onCancel={() => {}} onStatusChange={() => {}} cancelling={null} updating={null} showActions={false} />
               ))}
-            </SectionBlock>
+            </BookingSection>
           )}
 
           {visible.length === 0 && (
-            <div style={{ textAlign: 'center', padding: 80, color: '#bbb', fontSize: 15 }}>
-              {pendingOnly ? '前金未確認の予約はありません' : 'この日の予約はありません'}
+            <div className="card">
+              <div className="empty">
+                {pendingOnly
+                  ? '前金未確認の予約はありません。すべての予約を見るには「前金未確認のみ表示」を解除してください。'
+                  : 'この日の予約はありません。新規予約はタイムラインまたは新規予約ページから登録できます。'}
+              </div>
             </div>
           )}
         </>
@@ -218,147 +203,117 @@ export function Bookings() {
   );
 }
 
-function SectionBlock({ title, borderColor, headerBg, children }: {
-  title: string; borderColor: string; headerBg: string; children: React.ReactNode;
-}) {
+function BookingSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ marginBottom: 28 }}>
-      <div style={{
-        padding: '9px 16px', marginBottom: 10,
-        background: headerBg, borderLeft: `4px solid ${borderColor}`,
-        borderRadius: '0 8px 8px 0',
-      }}>
-        <span style={{ fontWeight: 700, color: borderColor, fontSize: 14 }}>{title}</span>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{children}</div>
-    </div>
+    <section className="card" style={{ marginBottom: 16 }}>
+      <h3 style={{
+        margin: 0, padding: '12px 20px', fontSize: 13, fontWeight: 600,
+        color: 'var(--sub)', borderBottom: '1px solid var(--line)',
+      }}>{title}</h3>
+      <div>{children}</div>
+    </section>
   );
 }
 
-function BookingCard({ b, onCancel, onStatusChange, cancelling, updating, showCancel = true }: {
+function StatusBadge({ status }: { status: string }) {
+  switch (status) {
+    case 'confirmed':
+      return <span className="badge badge-green" title="確定済みの予約です">確定</span>;
+    case 'completed':
+      return <span className="badge badge-gray" title="来店が完了した予約です">完了</span>;
+    case 'cancelled':
+      return <span className="badge badge-gray" title="キャンセルされた予約です">キャンセル</span>;
+    case 'no_show':
+      return <span className="badge badge-red" title="無断キャンセルとして記録された予約です">無断キャンセル</span>;
+    default:
+      return <span className="badge badge-gray">{status}</span>;
+  }
+}
+
+function BookingRow({ b, onCancel, onStatusChange, cancelling, updating, showActions = true }: {
   b: Booking;
   onCancel: (id: string) => void;
   onStatusChange: (id: string, status: 'completed' | 'no_show') => void;
   cancelling: string | null;
   updating: string | null;
-  showCancel?: boolean;
+  showActions?: boolean;
 }) {
-  const st = STATUS_MAP[b.status] ?? { label: b.status, color: '#555', bg: '#eee' };
   const isCancelled = b.status === 'cancelled';
   const busy = cancelling === b.id || updating === b.id;
 
+  const meta = [
+    b.menu?.name ?? 'メニュー不明',
+    b.staff?.full_name ?? null,
+    b.store_id in STORE_NAMES ? STORE_NAMES[b.store_id as StoreId] : null,
+    b.guest_phone ?? null,
+  ].filter(Boolean).join(' / ');
+
   return (
     <div style={{
-      background: isCancelled ? '#fafafa' : '#fff',
-      borderRadius: 10, padding: '14px 18px',
-      boxShadow: '0 1px 5px rgba(0,0,0,0.07)',
-      display: 'flex', alignItems: 'center', gap: 16,
-      opacity: isCancelled ? 0.65 : 1,
-      borderLeft: b.is_first_visit && !isCancelled ? '3px solid #E84C4C' : '3px solid transparent',
+      display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+      padding: '12px 20px', borderBottom: '1px solid var(--line)',
+      opacity: isCancelled ? 0.6 : 1,
     }}>
       {/* 時刻 */}
-      <div style={{ minWidth: 72, textAlign: 'center' }}>
-        <div style={{ fontWeight: 800, fontSize: 16, color: '#C3003A', letterSpacing: 0.5 }}>
-          {fmtTime(b.starts_at)}
-        </div>
-        <div style={{ fontSize: 12, color: '#aaa' }}>〜{fmtTime(b.ends_at)}</div>
-      </div>
+      <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+        {fmtTime(b.starts_at)}–{fmtTime(b.ends_at)}
+      </span>
 
-      <div style={{ width: 1, height: 44, background: '#EAEAEC' }} />
-
-      {/* メイン情報 */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginBottom: 3 }}>
-          <span style={{ fontWeight: 700, fontSize: 15, color: '#1a1a1a' }}>
-            {b.guest_name ?? '（名前未記入）'}
-          </span>
-          {b.is_first_visit && (
-            <Tag label="初回" color="#fff" bg="#E84C4C" />
-          )}
-          {b.source === 'web' && <Tag label="WEB予約" color="#1565C0" bg="#E8F4FD" />}
-          {b.source === 'staff' && <Tag label="手動入力" color="#5B4FBF" bg="#F3F0FF" />}
+      {/* 顧客名・メニュー・担当 */}
+      <div style={{ flex: 1, minWidth: 200 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600 }}>{b.guest_name ?? '（名前未記入）'}</span>
+          <span style={{ fontSize: 13, color: 'var(--sub)' }}>{meta}</span>
         </div>
-        <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
-          {b.menu?.name ?? 'メニュー不明'}
-          {b.staff?.full_name ? ` · ${b.staff.full_name}` : ''}
-          {b.store_id in STORE_NAMES
-            ? ` · ${STORE_NAMES[b.store_id as StoreId]}`
-            : ''}
-        </div>
-        {b.guest_phone && (
-          <div style={{ fontSize: 12, color: '#888' }}>{b.guest_phone}</div>
-        )}
         {b.customer_request && (
-          <div style={{ fontSize: 12, color: '#B8860B', marginTop: 3 }}>
-            💬 {b.customer_request}
+          <div style={{ fontSize: 12, color: 'var(--sub)', marginTop: 2 }} title="お客様からの要望です">
+            要望: {b.customer_request}
           </div>
         )}
       </div>
 
-      {/* 右列: ステータス・前金・ボタン */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0 }}>
-        <span style={{
-          fontSize: 12, fontWeight: 600, color: st.color,
-          background: st.bg, padding: '2px 10px', borderRadius: 20,
-        }}>{st.label}</span>
+      {/* バッジ群 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        {b.is_first_visit && !isCancelled && (
+          <span className="badge badge-red" title="初回来店のお客様です">初回</span>
+        )}
+        {b.source === 'web' && <span className="badge badge-gray" title="ネット予約から入った予約です">WEB予約</span>}
+        {b.source === 'staff' && <span className="badge badge-gray" title="スタッフが手動で登録した予約です">手動入力</span>}
+        <StatusBadge status={b.status} />
         {b.deposit_status === 'pending' && (
-          <span style={{
-            fontSize: 12, fontWeight: 700, color: '#fff', background: '#E8590C',
-            padding: '3px 10px', borderRadius: 6, letterSpacing: 0.5,
-          }}>⚠ 前金未確認</span>
+          <span className="badge badge-amber" title="前金の入金確認がまだ済んでいません">前金未確認</span>
         )}
         {(b.deposit_status === 'paid' || b.deposit_status === 'waived') && (
-          <span style={{ fontSize: 11, color: '#388E3C', fontWeight: 600 }}>前金済</span>
-        )}
-        {showCancel && b.status === 'confirmed' && (
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              onClick={() => onStatusChange(b.id, 'completed')}
-              disabled={busy}
-              style={{
-                padding: '4px 12px', fontSize: 12, fontWeight: 600,
-                border: 'none', color: '#fff', background: '#1B7A3C',
-                borderRadius: 6, cursor: 'pointer',
-                opacity: busy ? 0.5 : 1,
-              }}
-            >{updating === b.id ? '処理中…' : '来店完了'}</button>
-            <button
-              onClick={() => onStatusChange(b.id, 'no_show')}
-              disabled={busy}
-              style={{
-                padding: '4px 12px', fontSize: 12, fontWeight: 600,
-                border: '1px solid #C62828', color: '#C62828',
-                background: '#fff', borderRadius: 6, cursor: 'pointer',
-                opacity: busy ? 0.5 : 1,
-              }}
-            >無断</button>
-            <button
-              onClick={() => onCancel(b.id)}
-              disabled={busy}
-              style={{
-                padding: '4px 12px', fontSize: 12, fontWeight: 600,
-                border: '1px solid #E84C4C', color: '#E84C4C',
-                background: '#fff', borderRadius: 6, cursor: 'pointer',
-                opacity: busy ? 0.5 : 1,
-              }}
-            >{cancelling === b.id ? '処理中…' : 'キャンセル'}</button>
-          </div>
+          <span className="badge badge-green" title="前金の確認が済んでいます">前金済</span>
         )}
       </div>
+
+      {/* 操作 */}
+      {showActions && b.status === 'confirmed' && (
+        <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            onClick={() => onStatusChange(b.id, 'completed')}
+            disabled={busy}
+            title="この予約を来店完了として記録します"
+          >{updating === b.id ? '処理中…' : '来店完了'}</button>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            onClick={() => onStatusChange(b.id, 'no_show')}
+            disabled={busy}
+            title="この予約を無断キャンセルとして記録します"
+          >無断</button>
+          <button
+            type="button"
+            className="btn btn-sm btn-danger"
+            onClick={() => onCancel(b.id)}
+            disabled={busy}
+            title="この予約をキャンセルします"
+          >{cancelling === b.id ? '処理中…' : 'キャンセル'}</button>
+        </div>
+      )}
     </div>
   );
 }
-
-function Tag({ label, color, bg }: { label: string; color: string; bg: string }) {
-  return (
-    <span style={{
-      fontSize: 10, fontWeight: 700, color, background: bg,
-      padding: '2px 7px', borderRadius: 10,
-    }}>{label}</span>
-  );
-}
-
-const navBtn: React.CSSProperties = {
-  padding: '6px 14px', background: '#EAEAEC', border: 'none',
-  borderRadius: 8, cursor: 'pointer', fontSize: 13, color: '#444',
-};

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 
 type StoreId = 'tamashima' | 'kanamitsu';
@@ -76,39 +77,98 @@ export function Dashboard() {
     setLoading(false);
   }
 
-  const cards = [
-    { label: `本日の予約（${STORE_NAMES.tamashima}）`, value: `${stats.todayByStore.tamashima}件`, color: '#C3003A' },
-    { label: `本日の予約（${STORE_NAMES.kanamitsu}）`, value: `${stats.todayByStore.kanamitsu}件`, color: '#C3003A' },
-    { label: '本日の来店完了', value: `${stats.todayCompleted}件`, color: '#388E3C' },
-    { label: '本日売上見込み', value: `¥${stats.todayRevenue.toLocaleString()}`, color: '#B8860B' },
-    { label: '前金未確認', value: `${stats.depositPending}件`, color: stats.depositPending > 0 ? '#E8590C' : '#999' },
-    { label: '明日の予約', value: `${stats.tomorrowBookings}件`, color: '#1565C0' },
-  ];
+  const todayTotal = stats.todayByStore.tamashima + stats.todayByStore.kanamitsu;
 
   return (
-    <div>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 24, color: '#C3003A' }}>ダッシュボード</h1>
+    <div className="page">
+      <div className="page-head">
+        <h1 className="page-title">ダッシュボード</h1>
+        <p className="page-help">今日の店舗の状況をひと目で確認できます。</p>
+      </div>
+
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 60, color: '#aaa' }}>読み込み中…</div>
+        <div className="empty">読み込み中です…</div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-          {cards.map((card) => (
-            <div
-              key={card.label}
-              style={{
-                background: '#fff',
-                borderRadius: 12,
-                padding: 24,
-                borderLeft: `4px solid ${card.color}`,
-                boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-              }}
-            >
-              <div style={{ fontSize: 13, color: '#666', marginBottom: 8 }}>{card.label}</div>
-              <div style={{ fontSize: 30, fontWeight: 700, color: card.color }}>{card.value}</div>
+        <>
+          <div style={kpiGridStyle}>
+            <div className="card card-pad" title="本日の確定・完了予約の合計です">
+              <div style={kpiLabelStyle}>本日の予約</div>
+              <div style={kpiValueStyle}>{todayTotal}件</div>
+              <div style={kpiSubStyle}>
+                {STORE_NAMES.tamashima} {stats.todayByStore.tamashima}件・{STORE_NAMES.kanamitsu} {stats.todayByStore.kanamitsu}件
+              </div>
             </div>
-          ))}
-        </div>
+
+            <div className="card card-pad" title="本日、来店が完了した予約の件数です">
+              <div style={kpiLabelStyle}>本日の来店完了</div>
+              <div style={kpiValueStyle}>{stats.todayCompleted}件</div>
+            </div>
+
+            <div className="card card-pad" title="本日の確定・完了予約のメニュー料金の合計です">
+              <div style={kpiLabelStyle}>本日売上見込み</div>
+              <div style={kpiValueStyle}>¥{stats.todayRevenue.toLocaleString()}</div>
+            </div>
+
+            <div
+              className="card card-pad"
+              style={stats.depositPending > 0 ? { background: 'var(--amber-weak)' } : undefined}
+              title="前金の入金がまだ確認できていない本日の予約の件数です"
+            >
+              <div style={kpiLabelStyle}>前金未確認</div>
+              <div style={stats.depositPending > 0 ? { ...kpiValueStyle, color: 'var(--amber)' } : kpiValueStyle}>
+                {stats.depositPending}件
+              </div>
+              {stats.depositPending > 0 && (
+                <div style={kpiSubStyle}>
+                  <Link to="/bookings" style={{ color: 'var(--amber)' }}>
+                    予約管理で入金を確認してください
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            <div className="card card-pad" title="明日の確定・完了予約の件数です">
+              <div style={kpiLabelStyle}>明日の予約</div>
+              <div style={kpiValueStyle}>{stats.tomorrowBookings}件</div>
+            </div>
+          </div>
+
+          <div className="card card-pad" style={{ marginTop: 16 }}>
+            <div style={{ ...kpiLabelStyle, marginBottom: 12 }}>よく使う操作</div>
+            <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+              <Link to="/timeline" className="btn btn-secondary">タイムラインを開く</Link>
+              <Link to="/new-booking" className="btn btn-secondary">新規予約を登録する</Link>
+              <Link to="/staff-off" className="btn btn-secondary">スタッフの休みを登録する</Link>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
 }
+
+const kpiGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+  gap: 16,
+};
+
+const kpiLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: 'var(--sub)',
+  marginBottom: 8,
+};
+
+const kpiValueStyle: React.CSSProperties = {
+  fontSize: 28,
+  fontWeight: 600,
+  color: 'var(--ink)',
+  fontVariantNumeric: 'tabular-nums',
+  lineHeight: 1.2,
+};
+
+const kpiSubStyle: React.CSSProperties = {
+  fontSize: 13,
+  color: 'var(--sub)',
+  marginTop: 6,
+};

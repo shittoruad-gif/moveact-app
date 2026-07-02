@@ -1,6 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+
+// 手動予約入力
+// ・電話・店頭で受けた予約を登録する（単発）。右パネルにその日の予約状況を表示
+// ・「繰り返し予約」: 選択日を1回目として毎週/隔週で複数回をまとめて登録する。
+//   recurrence_group_id（migration 045）を同一シリーズで共有する
+// ・「先月の繰り返し予約から作成」: 対象月（今月/来月）の前月の定期予約シリーズを
+//   同じ曜日・時刻で対象月（今日より後の日付のみ）へコピーする
+// ・衝突チェックは担当スタッフ単位（app_bookings＋staff_unavailability＋airreserve_events、
+//   ±15分バッファ）。重複はスキップ扱いにして理由を表示する
+// ・日時はJST明示（+09:00）で保存する（素朴文字列はUTC解釈になるため禁止）
 
 type StoreId = 'tamashima' | 'kanamitsu';
 
@@ -8,11 +18,226 @@ interface RosterRow { staff_id: string; full_name: string; store_id: string; }
 interface Menu      { id: string; name: string; duration_minutes: number; price: number; }
 interface MenuStore { store_id: string; treatment_menu_id: string; }
 
+// 右パネル「この日の予約状況」の統合行（app_bookings＋airreserve_events）
+interface DayRow {
+  id: string;
+  source: 'app' | 'air';
+  starts_at: string;
+  ends_at: string;
+  name: string;          // 顧客名（AirReserveはsummary）
+  menuName: string;
+  staffName: string;
+  status: string;        // appのみ（confirmed/completed/no_show）
+  depositStatus: string; // appのみ
+}
+
+const STORE_LABEL: Record<StoreId, string> = { tamashima: '玉島店', kanamitsu: '金光店' };
+
+// 前後の入れ替え時間（分）。091のバッファ込みEXCLUDE制約・スタッフアプリの定期予約と揃える
+const BUFFER_MINUTES = 15;
+
+const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
 // JST基準の今日（YYYY-MM-DD）。実行環境のタイムゾーンに依存しない
 function isoToday() {
   const jst = new Date(Date.now() + 9 * 60 * 60 * 1000);
   return jst.toISOString().slice(0, 10);
 }
+
+function fmtTime(iso: string) {
+  return new Date(iso).toLocaleTimeString('ja-JP', {
+    hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo',
+  });
+}
+
+// 'YYYY-MM-DD' に日数を加算（TZ非依存のカレンダー計算）
+function addDays(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+// 'YYYY-MM-DD' → '7/18(土)' 表記（曜日はTZ非依存で判定）
+function fmtMdW(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const w = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return `${m}/${d}(${WEEKDAY_LABELS[w]})`;
+}
+
+// timestamptzをJSTで分解（+9hしてgetUTC系で読む。曜日もTZ非依存で取れる）
+function jstParts(iso: string): { dateStr: string; hhmm: string; weekday: number } {
+  const j = new Date(new Date(iso).getTime() + 9 * 3600000);
+  return {
+    dateStr: `${j.getUTCFullYear()}-${pad2(j.getUTCMonth() + 1)}-${pad2(j.getUTCDate())}`,
+    hhmm: `${pad2(j.getUTCHours())}:${pad2(j.getUTCMinutes())}`,
+    weekday: j.getUTCDay(),
+  };
+}
+
+// JST基準の今日からoffsetか月後の年月（mは0始まり）
+function monthOffsetJst(offset: number): { y: number; m: number } {
+  const t = new Date(Date.now() + 9 * 3600000);
+  const d = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + offset, 1));
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
+}
+
+function addMonths(y: number, m: number, delta: number): { y: number; m: number } {
+  const d = new Date(Date.UTC(y, m + delta, 1));
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
+}
+
+// 対象月のstarts_at検索窓（月初〜翌月初、JST明示）
+function monthWindow(y: number, m: number): { lo: string; hi: string } {
+  const next = addMonths(y, m, 1);
+  return {
+    lo: `${y}-${pad2(m + 1)}-01T00:00:00+09:00`,
+    hi: `${next.y}-${pad2(next.m + 1)}-01T00:00:00+09:00`,
+  };
+}
+
+// 対象月内で指定曜日に該当し、かつ今日より後の日付一覧（曜日はTZ非依存で判定）
+function candidateDates(y: number, m: number, weekday: number, todayStr: string): string[] {
+  const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  const out: string[] = [];
+  for (let d = 1; d <= days; d++) {
+    if (new Date(Date.UTC(y, m, d)).getUTCDay() !== weekday) continue;
+    const dateStr = `${y}-${pad2(m + 1)}-${pad2(d)}`;
+    if (dateStr <= todayStr) continue; // 生成対象は今日より後のみ
+    out.push(dateStr);
+  }
+  return out;
+}
+
+// ── スタッフのビジー区間（衝突チェック用）────────────────────
+// 予約=各行のバッファ込み / ブロック=素の時間 / AirReserve=既定バッファ込み。
+// staff_idが無い行（未割当の予約・全店ブロック）は誰を占有しているか特定できないため、
+// 安全側で全スタッフをブロック扱いにする（staffId=null）。
+
+interface BusyIv { staffId: string | null; s: number; e: number; }
+
+interface BusyBookingRow {
+  staff_id: string | null; starts_at: string; ends_at: string;
+  buffer_before: number | null; buffer_after: number | null;
+}
+interface BusyRangeRow { staff_id: string | null; starts_at: string; ends_at: string; }
+
+// 期間内のビジー区間を店舗単位でまとめて取得（+09:00日窓）。
+// staffIdsを渡すと該当スタッフ＋未割当行のみに絞って転送量を抑える
+async function fetchBusyIntervals(
+  storeId: StoreId, loIso: string, hiIso: string, staffIds?: string[],
+): Promise<BusyIv[]> {
+  const staffOr = staffIds && staffIds.length > 0
+    ? `staff_id.is.null,staff_id.in.(${staffIds.join(',')})`
+    : null;
+
+  let bq = supabase.from('app_bookings')
+    .select('staff_id, starts_at, ends_at, buffer_before, buffer_after')
+    .eq('store_id', storeId)
+    .neq('status', 'cancelled')
+    .gte('starts_at', loIso)
+    .lte('starts_at', hiIso);
+  if (staffOr) bq = bq.or(staffOr);
+
+  let uq = supabase.from('staff_unavailability')
+    .select('staff_id, starts_at, ends_at')
+    .or(`store_id.eq.${storeId},store_id.is.null`)
+    .lte('starts_at', hiIso)
+    .gte('ends_at', loIso);
+  if (staffOr) uq = uq.or(staffOr);
+
+  let aq = supabase.from('airreserve_events')
+    .select('staff_id, starts_at, ends_at')
+    .eq('store_id', storeId)
+    .gte('starts_at', loIso)
+    .lte('starts_at', hiIso);
+  if (staffOr) aq = aq.or(staffOr);
+
+  const [bk, un, air] = await Promise.all([bq, uq, aq]);
+  const err = bk.error ?? un.error ?? air.error;
+  if (err) throw new Error(err.message);
+
+  const out: BusyIv[] = [];
+  for (const b of ((bk.data as unknown as BusyBookingRow[]) ?? [])) {
+    out.push({
+      staffId: b.staff_id,
+      s: new Date(b.starts_at).getTime() - (b.buffer_before ?? BUFFER_MINUTES) * 60000,
+      e: new Date(b.ends_at).getTime() + (b.buffer_after ?? BUFFER_MINUTES) * 60000,
+    });
+  }
+  for (const u of ((un.data as unknown as BusyRangeRow[]) ?? [])) {
+    out.push({ staffId: u.staff_id, s: new Date(u.starts_at).getTime(), e: new Date(u.ends_at).getTime() });
+  }
+  for (const a of ((air.data as unknown as BusyRangeRow[]) ?? [])) {
+    out.push({
+      staffId: a.staff_id,
+      s: new Date(a.starts_at).getTime() - BUFFER_MINUTES * 60000,
+      e: new Date(a.ends_at).getTime() + BUFFER_MINUTES * 60000,
+    });
+  }
+  return out;
+}
+
+// 候補（±15分バッファ込み）が指定スタッフのビジー区間と重なるか
+function hasClash(busy: BusyIv[], staffId: string, startMs: number, endMs: number): boolean {
+  const bufS = startMs - BUFFER_MINUTES * 60000;
+  const bufE = endMs + BUFFER_MINUTES * 60000;
+  return busy.some(iv => (iv.staffId === null || iv.staffId === staffId) && bufS < iv.e && bufE > iv.s);
+}
+
+// 生成予定1件（繰り返し予約・先月コピー共通のプレビュー行）
+interface PlanItem {
+  key: string;
+  dateStr: string;   // 'YYYY-MM-DD'
+  hhmm: string;      // 'HH:MM'
+  startIso: string;
+  endIso: string;
+  ok: boolean;
+  reason: string | null;
+  checked: boolean;
+  seriesKey?: string; // コピー用: 由来シリーズのrecurrence_group_id
+  label?: string;     // コピー用: 顧客名
+}
+
+// 先月の繰り返し予約をシリーズ単位に集約した1行
+interface CopySeries {
+  groupId: string;
+  customerName: string;
+  guestName: string | null;
+  guestPhone: string | null;
+  guestEmail: string | null;
+  userId: string | null;
+  menuId: string;
+  menuName: string;
+  staffId: string | null;
+  staffName: string;
+  weekday: number;
+  hhmm: string;
+  durationMin: number;
+  count: number; // 先月の回数
+}
+
+interface SeriesSourceRow {
+  recurrence_group_id: string;
+  starts_at: string;
+  ends_at: string;
+  guest_name: string | null;
+  guest_phone: string | null;
+  guest_email: string | null;
+  user_id: string | null;
+  treatment_menu_id: string;
+  staff_id: string | null;
+  menu: { name: string } | null;
+  staff: { full_name: string } | null;
+}
+
+// コピー可能なシリーズか（担当必須・氏名情報のいずれか必須）
+function isCopyableSeries(s: CopySeries): boolean {
+  return !!s.staffId && (s.guestName !== null || s.userId !== null);
+}
+
+// 繰り返し回数の選択肢（2〜24回）
+const RECUR_COUNTS = Array.from({ length: 23 }, (_, i) => i + 2);
 
 const INIT_FORM = {
   storeId: 'tamashima' as StoreId,
@@ -52,6 +277,29 @@ export function NewBooking() {
   const [loading, setLoading]     = useState(false);
   const [success, setSuccess]     = useState(false);
   const [error, setError]         = useState<string | null>(null);
+  const [dayRows, setDayRows]     = useState<DayRow[]>([]);
+  const [dayLoading, setDayLoading] = useState(false);
+
+  // ── 繰り返し予約 ──
+  const [recurOn, setRecurOn]         = useState(false);
+  const [recurWeeks, setRecurWeeks]   = useState<1 | 2>(1); // 1=毎週 / 2=隔週
+  const [recurCount, setRecurCount]   = useState(4);
+  const [recurItems, setRecurItems]   = useState<PlanItem[] | null>(null);
+  const [recurChecking, setRecurChecking] = useState(false);
+  const [recurSaving, setRecurSaving] = useState(false);
+  const [recurError, setRecurError]   = useState<string | null>(null);
+  const [recurNote, setRecurNote]     = useState<string | null>(null);
+
+  // ── 先月の繰り返し予約からコピー ──
+  const [copyTargetMonth, setCopyTargetMonth] = useState<'this' | 'next'>('this');
+  const [copySeries, setCopySeries]   = useState<CopySeries[] | null>(null); // null=読み込み中
+  const [copySelected, setCopySelected] = useState<Set<string>>(new Set());
+  const [copyItems, setCopyItems]     = useState<PlanItem[] | null>(null);
+  const [copyNoDates, setCopyNoDates] = useState<string[]>([]);
+  const [copyChecking, setCopyChecking] = useState(false);
+  const [copySaving, setCopySaving]   = useState(false);
+  const [copyError, setCopyError]     = useState<string | null>(null);
+  const [copyNote, setCopyNote]       = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -100,6 +348,78 @@ export function NewBooking() {
     });
   }, [masterLoaded, form.storeId, roster, menuStores]);
 
+  // ── 既存予約の可視化: 選択中の店舗・日付の予約を統合取得 ──
+  // app_bookings(キャンセル除外・+09:00日窓) と airreserve_events(同窓) を時刻順に統合
+  const loadDayBookings = useCallback(async (storeId: StoreId, dateStr: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { setDayRows([]); return; }
+    setDayLoading(true);
+    const lo = `${dateStr}T00:00:00+09:00`;
+    const hi = `${dateStr}T23:59:59+09:00`;
+
+    const [b, a] = await Promise.all([
+      supabase
+        .from('app_bookings')
+        .select(`
+          id, starts_at, ends_at, status, deposit_status, guest_name,
+          menu:treatment_menu_id(name),
+          staff:staff_id(full_name)
+        `)
+        .eq('store_id', storeId)
+        .neq('status', 'cancelled')
+        .gte('starts_at', lo)
+        .lte('starts_at', hi)
+        .order('starts_at'),
+      supabase
+        .from('airreserve_events')
+        .select('id, staff_id, starts_at, ends_at, summary')
+        .eq('store_id', storeId)
+        .gte('starts_at', lo)
+        .lte('starts_at', hi)
+        .order('starts_at'),
+    ]);
+
+    type AppRow = {
+      id: string; starts_at: string; ends_at: string; status: string; deposit_status: string;
+      guest_name: string;
+      menu: { name: string } | null;
+      staff: { full_name: string } | null;
+    };
+    type AirRow = { id: string; staff_id: string | null; starts_at: string; ends_at: string; summary: string | null };
+
+    const appRows: DayRow[] = ((b.data as unknown as AppRow[]) ?? []).map(r => ({
+      id: `app-${r.id}`,
+      source: 'app',
+      starts_at: r.starts_at,
+      ends_at: r.ends_at,
+      name: r.guest_name,
+      menuName: r.menu?.name ?? '',
+      staffName: r.staff?.full_name ?? '',
+      status: r.status,
+      depositStatus: r.deposit_status,
+    }));
+    const airRows: DayRow[] = ((a.data as unknown as AirRow[]) ?? []).map(r => ({
+      id: `air-${r.id}`,
+      source: 'air',
+      starts_at: r.starts_at,
+      ends_at: r.ends_at,
+      name: r.summary ?? '（内容未取得）',
+      menuName: '',
+      staffName: roster.find(x => x.staff_id === r.staff_id)?.full_name ?? '',
+      status: '',
+      depositStatus: '',
+    }));
+
+    setDayRows(
+      [...appRows, ...airRows].sort((x, y) => x.starts_at.localeCompare(y.starts_at)),
+    );
+    setDayLoading(false);
+  }, [roster]);
+
+  // 日付・店舗の変更で自動更新
+  useEffect(() => {
+    loadDayBookings(form.storeId, form.date);
+  }, [loadDayBookings, form.storeId, form.date]);
+
   const set = <K extends keyof typeof INIT_FORM>(key: K, val: (typeof INIT_FORM)[K]) =>
     setForm(f => ({ ...f, [key]: val }));
 
@@ -114,8 +434,24 @@ export function NewBooking() {
     });
   })();
 
+  // 選択中の時間帯（[starts, ends) 区間）。右パネルの重なりハイライトに使用
+  const selectedRange = useMemo(() => {
+    if (!form.date || !form.time) return null;
+    const s = new Date(`${form.date}T${form.time}:00+09:00`);
+    if (Number.isNaN(s.getTime())) return null;
+    const dur = selectedMenu?.duration_minutes ?? 60;
+    return { start: s.getTime(), end: s.getTime() + dur * 60 * 1000 };
+  }, [form.date, form.time, selectedMenu]);
+
+  const overlapsSelected = (row: DayRow) => {
+    if (!selectedRange) return false;
+    return new Date(row.starts_at).getTime() < selectedRange.end &&
+           new Date(row.ends_at).getTime() > selectedRange.start;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (recurOn) return; // 繰り返し予約は「繰り返し予約」欄の確認→登録フローで行う
     if (!form.guestName.trim()) { setError('お名前を入力してください'); return; }
     if (!form.guestPhone.trim()) { setError('電話番号を入力してください'); return; }
     if (!form.menuId) { setError('メニューを選択してください'); return; }
@@ -193,61 +529,625 @@ export function NewBooking() {
     }
 
     setSuccess(true);
-    setForm(f => ({
-      ...INIT_FORM,
-      storeId: f.storeId,
-      staffId: f.staffId,
-      menuId:  f.menuId,
-      date:    f.date,
-      time:    f.time,
-    }));
+    // 日付・店舗を保持してクリア
+    setForm(f => ({ ...INIT_FORM, storeId: f.storeId, date: f.date }));
+    loadDayBookings(form.storeId, form.date); // 登録した予約を右パネルへ即反映
     setTimeout(() => setSuccess(false), 4000);
   };
 
+  // ── 繰り返し予約 ─────────────────────────────
+
+  // 日程に影響する入力が変わったら確認済みプレビューは破棄する（前提が変わるため）
+  useEffect(() => {
+    setRecurItems(null);
+  }, [form.storeId, form.staffId, form.menuId, form.date, form.time, recurWeeks, recurCount, recurOn]);
+
+  const recurSelectedCount = recurItems?.filter(i => i.ok && i.checked).length ?? 0;
+
+  const toggleRecurItem = (key: string) =>
+    setRecurItems(items => items && items.map(i => (i.key === key ? { ...i, checked: !i.checked } : i)));
+
+  // 生成予定の日程（1回目=選択日、以降+7日 or +14日）を作り、担当スタッフの衝突を判定する
+  const handleRecurPreview = async () => {
+    setRecurError(null); setRecurNote(null);
+    if (!form.guestName.trim()) { setRecurError('お名前を入力してください'); return; }
+    if (!form.guestPhone.trim()) { setRecurError('電話番号を入力してください'); return; }
+    if (!form.menuId) { setRecurError('メニューを選択してください'); return; }
+    if (!form.staffId) { setRecurError('繰り返し予約では担当スタッフを選択してください'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(form.date) || !form.time) { setRecurError('日付と開始時刻を入力してください'); return; }
+
+    setRecurChecking(true);
+    try {
+      const duration = selectedMenu?.duration_minutes ?? 60;
+      const dates = Array.from({ length: recurCount }, (_, i) => addDays(form.date, i * recurWeeks * 7));
+      const busy = await fetchBusyIntervals(
+        form.storeId,
+        `${dates[0]}T00:00:00+09:00`,
+        `${dates[dates.length - 1]}T23:59:59+09:00`,
+        [form.staffId],
+      );
+      const items: PlanItem[] = dates.map(dateStr => {
+        const startIso = `${dateStr}T${form.time}:00+09:00`;
+        const startMs = new Date(startIso).getTime();
+        const endMs = startMs + duration * 60000;
+        const clash = hasClash(busy, form.staffId, startMs, endMs);
+        return {
+          key: dateStr,
+          dateStr,
+          hhmm: form.time,
+          startIso,
+          endIso: new Date(endMs).toISOString(),
+          ok: !clash,
+          reason: clash ? '既存の予約・予定と重なっています' : null,
+          checked: !clash,
+        };
+      });
+      setRecurItems(items);
+    } catch (e) {
+      setRecurError(`エラー: 空き状況の確認に失敗しました（${e instanceof Error ? e.message : String(e)}）`);
+    }
+    setRecurChecking(false);
+  };
+
+  // 選択した日程を1件ずつINSERT（recurrence_group_idを共有）。
+  // 23P01/exclusion（DB制約が最終防衛線）は該当日だけスキップに算入する
+  const handleRecurApply = async () => {
+    if (!recurItems) return;
+    const chosen = recurItems.filter(i => i.ok && i.checked);
+    if (chosen.length === 0) { setRecurError('登録する日程を選択してください'); return; }
+
+    setRecurSaving(true); setRecurError(null);
+    const groupId = crypto.randomUUID();
+    let inserted = 0;
+    const skipDetails: { dateStr: string; msg: string }[] = [];
+
+    for (const item of chosen) {
+      const { error: err } = await supabase.from('app_bookings').insert({
+        store_id:           form.storeId,
+        treatment_menu_id:  form.menuId,
+        staff_id:           form.staffId,
+        starts_at:          item.startIso,
+        ends_at:            item.endIso,
+        guest_name:         form.guestName.trim(),
+        guest_phone:        form.guestPhone.trim(),
+        guest_phone_norm:   form.guestPhone.replace(/\D/g, ''),
+        guest_email:        form.guestEmail.trim() || null,
+        customer_request:   form.request.trim() || null,
+        status:             'confirmed',
+        source:             'staff',
+        created_by:         'staff',
+        is_first_visit:     form.isFirstVisit,
+        deposit_status:     'none',
+        payment_status:     'not_required',
+        recurrence_group_id: groupId,
+      });
+      if (!err) {
+        inserted += 1;
+      } else if (err.code === '23P01') {
+        skipDetails.push({ dateStr: item.dateStr, msg: `${fmtMdW(item.dateStr)}は既存予約と重なるためスキップ` });
+      } else {
+        skipDetails.push({ dateStr: item.dateStr, msg: `${fmtMdW(item.dateStr)}はエラーのためスキップ（${err.message}）` });
+      }
+    }
+
+    // プレビュー時点で重複していた分もスキップとして案内する
+    for (const item of recurItems.filter(i => !i.ok)) {
+      skipDetails.push({ dateStr: item.dateStr, msg: `${fmtMdW(item.dateStr)}は既存予約と重なるためスキップ` });
+    }
+    skipDetails.sort((a, b) => a.dateStr.localeCompare(b.dateStr));
+
+    const parts = skipDetails.map(d => d.msg);
+    const uncheckedCount = recurItems.filter(i => i.ok && !i.checked).length;
+    if (uncheckedCount > 0) parts.push(`${uncheckedCount}件は選択を外したため登録していません`);
+
+    let msg = `${recurItems.length}件中${inserted}件を登録しました`;
+    if (parts.length > 0) msg += `（${parts.join('、')}）`;
+    setRecurNote(msg);
+    setRecurItems(null);
+
+    if (inserted > 0) {
+      // 単発登録と同様、店舗・日付を保持してフォームをクリアし、右パネルへ即反映
+      setForm(f => ({ ...INIT_FORM, storeId: f.storeId, date: f.date }));
+      loadDayBookings(form.storeId, form.date);
+    }
+    setRecurSaving(false);
+  };
+
+  // ── 先月の繰り返し予約からコピー ─────────────────
+
+  const copyTarget = copyTargetMonth === 'next' ? monthOffsetJst(1) : monthOffsetJst(0);
+  const copyPrev = addMonths(copyTarget.y, copyTarget.m, -1); // 「先月」= 対象月の前月
+  const copyTargetWord = copyTargetMonth === 'next' ? '来月' : '今月';
+  const copyTargetLabel = `${copyTarget.m + 1}月`;
+  const copyPrevLabel = `${copyPrev.m + 1}月`;
+
+  const copySelectableList = (copySeries ?? []).filter(isCopyableSeries);
+  const copyAllSelected =
+    copySelectableList.length > 0 && copySelectableList.every(s => copySelected.has(s.groupId));
+  const copySelectedCount = copyItems?.filter(i => i.ok && i.checked).length ?? 0;
+
+  const toggleCopySeries = (groupId: string) => {
+    setCopySelected(prev => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+    setCopyItems(null); // 選択が変わったらプレビューは破棄
+  };
+
+  const toggleCopyAllSeries = () => {
+    setCopySelected(copyAllSelected ? new Set() : new Set(copySelectableList.map(s => s.groupId)));
+    setCopyItems(null);
+  };
+
+  const toggleCopyItem = (key: string) =>
+    setCopyItems(items => items && items.map(i => (i.key === key ? { ...i, checked: !i.checked } : i)));
+
+  // 選択店舗の先月分（recurrence_group_id IS NOT NULL, status<>'cancelled'）をシリーズ単位に集約
+  useEffect(() => {
+    let cancelled = false;
+    setCopySeries(null);
+    setCopySelected(new Set());
+    setCopyItems(null);
+    setCopyNoDates([]);
+    setCopyError(null);
+    setCopyNote(null);
+
+    (async () => {
+      const target = copyTargetMonth === 'next' ? monthOffsetJst(1) : monthOffsetJst(0);
+      const prev = addMonths(target.y, target.m, -1);
+      const win = monthWindow(prev.y, prev.m);
+
+      const { data, error: err } = await supabase
+        .from('app_bookings')
+        .select(`
+          recurrence_group_id, starts_at, ends_at,
+          guest_name, guest_phone, guest_email, user_id,
+          treatment_menu_id, staff_id,
+          menu:treatment_menu_id(name),
+          staff:staff_id(full_name)
+        `)
+        .eq('store_id', form.storeId)
+        .neq('status', 'cancelled')
+        .not('recurrence_group_id', 'is', null)
+        .gte('starts_at', win.lo)
+        .lt('starts_at', win.hi)
+        .order('starts_at');
+
+      if (cancelled) return;
+      if (err) {
+        setCopyError(`エラー: 先月の繰り返し予約の読み込みに失敗しました（${err.message}）`);
+        setCopySeries([]);
+        return;
+      }
+
+      // シリーズ単位に集約（代表行=最新回。曜日・時刻・メニュー・担当は最新回に従う）
+      const map = new Map<string, { rep: SeriesSourceRow; count: number }>();
+      for (const r of ((data as unknown as SeriesSourceRow[]) ?? [])) {
+        const cur = map.get(r.recurrence_group_id);
+        if (cur) { cur.count += 1; cur.rep = r; }
+        else map.set(r.recurrence_group_id, { rep: r, count: 1 });
+      }
+
+      // 会員予約（guest_name無し）の氏名をまとめて取得
+      const userIds = [...new Set(
+        [...map.values()].filter(v => !v.rep.guest_name && v.rep.user_id).map(v => v.rep.user_id as string),
+      )];
+      const profileNames = new Map<string, string>();
+      if (userIds.length > 0) {
+        const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', userIds);
+        for (const p of (((profs as { id: string; full_name: string | null }[] | null) ?? []))) {
+          profileNames.set(p.id, p.full_name ?? '');
+        }
+      }
+      if (cancelled) return;
+
+      const list: CopySeries[] = [...map.entries()].map(([groupId, { rep, count }]) => {
+        const s = jstParts(rep.starts_at);
+        const durationMin = Math.max(
+          5, Math.round((new Date(rep.ends_at).getTime() - new Date(rep.starts_at).getTime()) / 60000),
+        );
+        return {
+          groupId,
+          customerName: rep.guest_name
+            ?? (rep.user_id ? (profileNames.get(rep.user_id) || '（会員）') : '（名前未設定）'),
+          guestName: rep.guest_name,
+          guestPhone: rep.guest_phone,
+          guestEmail: rep.guest_email,
+          userId: rep.user_id,
+          menuId: rep.treatment_menu_id,
+          menuName: rep.menu?.name ?? '-',
+          staffId: rep.staff_id,
+          staffName: rep.staff?.full_name ?? '（未指定）',
+          weekday: s.weekday,
+          hhmm: s.hhmm,
+          durationMin,
+          count,
+        };
+      }).sort((a, b) =>
+        a.weekday - b.weekday ||
+        a.hhmm.localeCompare(b.hhmm) ||
+        a.customerName.localeCompare(b.customerName, 'ja'),
+      );
+
+      setCopySeries(list);
+      setCopySelected(new Set(list.filter(isCopyableSeries).map(s => s.groupId)));
+    })();
+
+    return () => { cancelled = true; };
+  }, [form.storeId, copyTargetMonth]);
+
+  // 選択シリーズを対象月の同曜日・同時刻（今日より後のみ）へ展開し、担当スタッフの衝突を判定
+  const handleCopyPreview = async () => {
+    if (!copySeries) return;
+    setCopyError(null); setCopyNote(null);
+    const selected = copySeries.filter(s => copySelected.has(s.groupId) && isCopyableSeries(s));
+    if (selected.length === 0) { setCopyError('コピーする予約を選択してください'); return; }
+
+    setCopyChecking(true);
+    try {
+      const today = isoToday();
+      const items: PlanItem[] = [];
+      const noDates: string[] = [];
+
+      for (const s of selected) {
+        const dates = candidateDates(copyTarget.y, copyTarget.m, s.weekday, today);
+        if (dates.length === 0) {
+          noDates.push(`${s.customerName}様（${WEEKDAY_LABELS[s.weekday]}曜 ${s.hhmm}）`);
+          continue;
+        }
+        for (const dateStr of dates) {
+          const startIso = `${dateStr}T${s.hhmm}:00+09:00`;
+          const startMs = new Date(startIso).getTime();
+          const endMs = startMs + s.durationMin * 60000;
+          items.push({
+            key: `${s.groupId}|${dateStr}`,
+            dateStr,
+            hhmm: s.hhmm,
+            startIso,
+            endIso: new Date(endMs).toISOString(),
+            ok: true,
+            reason: null,
+            checked: true,
+            seriesKey: s.groupId,
+            label: s.customerName,
+          });
+        }
+      }
+
+      if (items.length === 0) {
+        setCopyNoDates(noDates);
+        setCopyItems(null);
+        setCopyError('対象月に登録できる日がありません（今日より後の日付のみが対象です）');
+        setCopyChecking(false);
+        return;
+      }
+
+      const dateStrs = items.map(i => i.dateStr).sort();
+      const staffIds = [...new Set(selected.map(s => s.staffId as string))];
+      const busy = await fetchBusyIntervals(
+        form.storeId,
+        `${dateStrs[0]}T00:00:00+09:00`,
+        `${dateStrs[dateStrs.length - 1]}T23:59:59+09:00`,
+        staffIds,
+      );
+      const bySeries = new Map(selected.map(s => [s.groupId, s]));
+      for (const item of items) {
+        const s = bySeries.get(item.seriesKey as string);
+        if (!s) continue;
+        const startMs = new Date(item.startIso).getTime();
+        const endMs = startMs + s.durationMin * 60000;
+        if (hasClash(busy, s.staffId as string, startMs, endMs)) {
+          item.ok = false;
+          item.reason = '既存の予約・予定と重なっています';
+          item.checked = false;
+        }
+      }
+      items.sort((a, b) => a.dateStr.localeCompare(b.dateStr) || a.hhmm.localeCompare(b.hhmm));
+
+      setCopyNoDates(noDates);
+      setCopyItems(items);
+    } catch (e) {
+      setCopyError(`エラー: 空き状況の確認に失敗しました（${e instanceof Error ? e.message : String(e)}）`);
+    }
+    setCopyChecking(false);
+  };
+
+  // 選択した日程を1件ずつINSERT。シリーズごとに新しいrecurrence_group_idを発行し、
+  // ゲスト情報とメニュー・担当を引き継ぐ。23P01/exclusionは該当日だけスキップに算入
+  const handleCopyApply = async () => {
+    if (!copyItems || !copySeries) return;
+    const chosen = copyItems.filter(i => i.ok && i.checked);
+    if (chosen.length === 0) { setCopyError('登録する日程を選択してください'); return; }
+
+    setCopySaving(true); setCopyError(null);
+    const bySeries = new Map(copySeries.map(s => [s.groupId, s]));
+    const newGroupIds = new Map<string, string>();
+    let inserted = 0;
+    const skipDetails: { dateStr: string; msg: string }[] = [];
+
+    for (const item of chosen) {
+      const s = bySeries.get(item.seriesKey as string);
+      if (!s) continue;
+      let gid = newGroupIds.get(s.groupId);
+      if (!gid) { gid = crypto.randomUUID(); newGroupIds.set(s.groupId, gid); }
+
+      const { error: err } = await supabase.from('app_bookings').insert({
+        store_id:           form.storeId,
+        treatment_menu_id:  s.menuId,
+        staff_id:           s.staffId,
+        starts_at:          item.startIso,
+        ends_at:            item.endIso,
+        user_id:            s.userId,
+        guest_name:         s.guestName,
+        guest_phone:        s.guestPhone,
+        guest_phone_norm:   s.guestPhone ? s.guestPhone.replace(/\D/g, '') : null,
+        guest_email:        s.guestEmail,
+        status:             'confirmed',
+        source:             'staff',
+        created_by:         'staff',
+        is_first_visit:     false,
+        deposit_status:     'none',
+        payment_status:     'not_required',
+        recurrence_group_id: gid,
+      });
+      if (!err) {
+        inserted += 1;
+      } else if (err.code === '23P01') {
+        skipDetails.push({
+          dateStr: item.dateStr,
+          msg: `${item.label}様の${fmtMdW(item.dateStr)}は既存予約と重なるためスキップ`,
+        });
+      } else {
+        skipDetails.push({
+          dateStr: item.dateStr,
+          msg: `${item.label}様の${fmtMdW(item.dateStr)}はエラーのためスキップ（${err.message}）`,
+        });
+      }
+    }
+
+    // プレビュー時点で重複していた分もスキップとして案内する
+    for (const item of copyItems.filter(i => !i.ok)) {
+      skipDetails.push({
+        dateStr: item.dateStr,
+        msg: `${item.label}様の${fmtMdW(item.dateStr)}は既存予約と重なるためスキップ`,
+      });
+    }
+    skipDetails.sort((a, b) => a.dateStr.localeCompare(b.dateStr));
+
+    const parts = skipDetails.map(d => d.msg);
+    const uncheckedCount = copyItems.filter(i => i.ok && !i.checked).length;
+    if (uncheckedCount > 0) parts.push(`${uncheckedCount}件は選択を外したため登録していません`);
+
+    let msg = `${copyTargetLabel}に${copyItems.length}件中${inserted}件を登録しました`;
+    if (parts.length > 0) msg += `（${parts.join('、')}）`;
+    setCopyNote(msg);
+    setCopyItems(null);
+    setCopyNoDates([]);
+    loadDayBookings(form.storeId, form.date); // 表示中の日に登録した場合に右パネルへ即反映
+    setCopySaving(false);
+  };
+
   return (
-    <div>
-      <h2 style={{ margin: '0 0 24px', fontSize: 22, fontWeight: 700, color: '#C3003A' }}>
-        手動予約入力
-      </h2>
+    <div className="page">
+      <div className="page-head">
+        <h1 className="page-title">手動予約入力</h1>
+        <p className="page-help">
+          電話や店頭で受けた予約を登録します。毎週同じ曜日・時間の予約は「繰り返し予約」でまとめて登録できます。
+        </p>
+      </div>
 
       {success && (
-        <div style={{
-          padding: '12px 16px', background: '#E8F5E9', border: '1px solid #A5D6A7',
-          borderRadius: 8, marginBottom: 20, color: '#2E7D32', fontWeight: 600, fontSize: 14,
-        }}>
-          ✅ 予約を登録しました
+        <div
+          className="note"
+          role="status"
+          style={{ background: 'var(--green-weak)', color: 'var(--green)', marginBottom: 16 }}
+        >
+          予約を登録しました
         </div>
       )}
       {error && (
-        <div style={{
-          padding: '12px 16px', background: '#FFEBEE', border: '1px solid #EF9A9A',
-          borderRadius: 8, marginBottom: 20, color: '#C62828', fontSize: 14,
-        }}>
-          ⚠️ {error}
+        <div
+          className="note"
+          role="alert"
+          style={{ background: 'var(--red-weak)', color: 'var(--red)', marginBottom: 16 }}
+        >
+          {error}
         </div>
       )}
 
-      <form onSubmit={handleSubmit}>
-        {/* 予約情報 */}
-        <Card title="予約情報">
-          <Grid2>
-            <Field label="店舗 *">
-              <select style={sel} value={form.storeId} onChange={e => set('storeId', e.target.value as StoreId)}>
-                <option value="tamashima">玉島店</option>
-                <option value="kanamitsu">金光店</option>
-              </select>
-            </Field>
+      {/* 左=入力フォーム / 右=この日の予約状況。狭い画面では縦積み */}
+      <style>{`
+        .nb-layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+          gap: 16px;
+          align-items: start;
+        }
+        .nb-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 16px;
+        }
+        @media (max-width: 900px) {
+          .nb-layout { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 560px) {
+          .nb-grid { grid-template-columns: 1fr; }
+        }
+      `}</style>
+      <div className="nb-layout">
+        {/* ── 入力フォーム ── */}
+        <form onSubmit={handleSubmit} className="card">
+          <div className="card-pad">
+            <div className="nb-grid">
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label className="field-label">店舗 <RequiredBadge /></label>
+                <div className="seg" role="group" aria-label="店舗切替">
+                  {(['tamashima', 'kanamitsu'] as StoreId[]).map(sid => (
+                    <button
+                      key={sid}
+                      type="button"
+                      className={`seg-btn${form.storeId === sid ? ' seg-btn--active' : ''}`}
+                      onClick={() => set('storeId', sid)}
+                      title={`${STORE_LABEL[sid]}の予約として登録します`}
+                    >
+                      {STORE_LABEL[sid]}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-            <Field label="担当スタッフ">
-              <select style={sel} value={form.staffId} onChange={e => set('staffId', e.target.value)}>
-                <option value="">指名なし</option>
-                {staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
-              </select>
-            </Field>
+              <div className="field">
+                <label className="field-label" htmlFor="nb-date">日付 <RequiredBadge /></label>
+                <input
+                  id="nb-date" type="date" className="input"
+                  value={form.date} onChange={e => set('date', e.target.value)}
+                />
+              </div>
 
-            <div style={{ gridColumn: '1 / -1' }}>
-              <Field label="メニュー *">
-                <select style={sel} value={form.menuId} onChange={e => set('menuId', e.target.value)}>
+              <div className="field">
+                <label className="field-label" htmlFor="nb-time">開始時刻 <RequiredBadge /></label>
+                <input
+                  id="nb-time" type="time" className="input" step="600"
+                  value={form.time} onChange={e => set('time', e.target.value)}
+                />
+              </div>
+
+              {/* ── 繰り返し予約 ── */}
+              <div className="card" style={{ gridColumn: '1 / -1' }}>
+                <div className="card-pad">
+                  <h2 style={{ margin: '0 0 10px', fontSize: 15, fontWeight: 600, color: 'var(--ink)' }}>
+                    繰り返し予約
+                  </h2>
+                  <label
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14 }}
+                    title="毎週・隔週の同じ曜日・時間の予約をまとめて登録します"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={recurOn}
+                      onChange={e => { setRecurOn(e.target.checked); setRecurError(null); setRecurNote(null); }}
+                      style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
+                    />
+                    <span>繰り返し予約にする</span>
+                  </label>
+
+                  {recurOn && (
+                    <div style={{ marginTop: 12 }}>
+                      <div className="nb-grid">
+                        <div className="field">
+                          <label className="field-label" htmlFor="nb-recur-freq">頻度</label>
+                          <select
+                            id="nb-recur-freq" className="select"
+                            value={recurWeeks}
+                            onChange={e => setRecurWeeks(Number(e.target.value) === 2 ? 2 : 1)}
+                          >
+                            <option value={1}>毎週</option>
+                            <option value={2}>隔週</option>
+                          </select>
+                        </div>
+                        <div className="field">
+                          <label className="field-label" htmlFor="nb-recur-count">回数</label>
+                          <select
+                            id="nb-recur-count" className="select"
+                            value={recurCount}
+                            onChange={e => setRecurCount(Number(e.target.value))}
+                          >
+                            {RECUR_COUNTS.map(c => <option key={c} value={c}>{c}回</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--sub)' }}>
+                        選択した日を1回目として、同じ曜日・時間で繰り返し登録します
+                      </p>
+
+                      <div style={{ marginTop: 12 }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleRecurPreview}
+                          disabled={recurChecking || recurSaving}
+                          title="生成予定の日程と空き状況を確認します"
+                        >
+                          {recurChecking ? '確認中…' : '日程を確認する'}
+                        </button>
+                      </div>
+
+                      {recurError && (
+                        <div className="note note-red" role="alert" style={{ marginTop: 12 }}>
+                          {recurError}
+                        </div>
+                      )}
+
+                      {recurItems && (
+                        <div style={{ marginTop: 12 }}>
+                          <p style={{ margin: '0 0 4px', fontSize: 13, color: 'var(--sub)' }}>
+                            生成予定の日程（全{recurItems.length}件・登録可{recurItems.filter(i => i.ok).length}件）
+                          </p>
+                          {recurItems.map(item => (
+                            <label
+                              key={item.key}
+                              style={{
+                                display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+                                padding: '6px 4px', borderBottom: '1px solid var(--line)',
+                                fontSize: 13, cursor: item.ok ? 'pointer' : 'default',
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={item.checked}
+                                disabled={!item.ok || recurSaving}
+                                onChange={() => toggleRecurItem(item.key)}
+                                style={{ width: 15, height: 15, accentColor: 'var(--accent)' }}
+                              />
+                              <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+                                {fmtMdW(item.dateStr)} {item.hhmm}–{fmtTime(item.endIso)}
+                              </span>
+                              {item.ok ? (
+                                <span className="badge badge-green">○ 登録可</span>
+                              ) : (
+                                <span className="badge badge-amber" title={item.reason ?? undefined}>
+                                  × スキップ（重複あり）
+                                </span>
+                              )}
+                            </label>
+                          ))}
+                          <div style={{ marginTop: 12 }}>
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              onClick={handleRecurApply}
+                              disabled={recurSaving || recurSelectedCount === 0}
+                              title="チェックした日程をまとめて登録します"
+                            >
+                              {recurSaving ? '登録中…' : `${recurSelectedCount}件を登録する`}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {recurNote && (
+                        <div
+                          className="note"
+                          role="status"
+                          style={{ background: 'var(--green-weak)', color: 'var(--green)', marginTop: 12 }}
+                        >
+                          {recurNote}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label className="field-label" htmlFor="nb-menu">メニュー <RequiredBadge /></label>
+                <select
+                  id="nb-menu" className="select"
+                  value={form.menuId} onChange={e => set('menuId', e.target.value)}
+                >
                   <option value="">選択してください</option>
                   {storeMenus.map(m => (
                     <option key={m.id} value={m.id}>
@@ -255,132 +1155,381 @@ export function NewBooking() {
                     </option>
                   ))}
                 </select>
-              </Field>
-            </div>
+                {endTime && (
+                  <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--sub)' }}>
+                    終了予定 <strong style={{ color: 'var(--ink)' }}>{endTime}</strong>
+                    （{selectedMenu?.duration_minutes}分）
+                  </p>
+                )}
+              </div>
 
-            <Field label="日付 *">
-              <input type="date" style={inp} value={form.date} onChange={e => set('date', e.target.value)} />
-            </Field>
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label className="field-label" htmlFor="nb-staff">
+                  担当スタッフ{recurOn && <> <RequiredBadge /></>}
+                </label>
+                <select
+                  id="nb-staff" className="select"
+                  value={form.staffId} onChange={e => set('staffId', e.target.value)}
+                >
+                  <option value="">指名なし</option>
+                  {staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                </select>
+                {recurOn && (
+                  <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--sub)' }}>
+                    繰り返し予約は担当スタッフ単位で空きを確認するため、担当の選択が必要です。
+                  </p>
+                )}
+              </div>
 
-            <Field label="開始時刻 *">
-              <input type="time" style={inp} value={form.time} onChange={e => set('time', e.target.value)} step="600" />
-            </Field>
-          </Grid2>
-
-          {endTime && (
-            <div style={{
-              marginTop: 12, padding: '8px 14px', background: '#F5F5F7',
-              borderRadius: 8, fontSize: 13, color: '#666',
-            }}>
-              終了予定: <strong>{endTime}</strong>（{selectedMenu?.duration_minutes}分）
-            </div>
-          )}
-        </Card>
-
-        {/* お客様情報 */}
-        <Card title="お客様情報">
-          <Grid2>
-            <Field label="お名前 *">
-              <input
-                type="text" style={inp} placeholder="山田 花子"
-                value={form.guestName} onChange={e => set('guestName', e.target.value)}
-              />
-            </Field>
-            <Field label="電話番号 *">
-              <input
-                type="tel" style={inp} placeholder="090-1234-5678"
-                value={form.guestPhone} onChange={e => set('guestPhone', e.target.value)}
-              />
-            </Field>
-            <div style={{ gridColumn: '1 / -1' }}>
-              <Field label="メールアドレス">
+              <div className="field">
+                <label className="field-label" htmlFor="nb-name">お名前 <RequiredBadge /></label>
                 <input
-                  type="email" style={inp} placeholder="example@email.com"
+                  id="nb-name" type="text" className="input" placeholder="山田 花子"
+                  value={form.guestName} onChange={e => set('guestName', e.target.value)}
+                />
+              </div>
+
+              <div className="field">
+                <label className="field-label" htmlFor="nb-phone">電話番号 <RequiredBadge /></label>
+                <input
+                  id="nb-phone" type="tel" className="input" placeholder="090-1234-5678"
+                  value={form.guestPhone} onChange={e => set('guestPhone', e.target.value)}
+                />
+              </div>
+
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label className="field-label" htmlFor="nb-email">メールアドレス</label>
+                <input
+                  id="nb-email" type="email" className="input" placeholder="example@email.com"
                   value={form.guestEmail} onChange={e => set('guestEmail', e.target.value)}
                 />
-              </Field>
-            </div>
-            <div style={{ gridColumn: '1 / -1' }}>
-              <Field label="備考・要望">
+              </div>
+
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label className="field-label" htmlFor="nb-request">備考・要望</label>
                 <textarea
-                  style={{ ...inp, height: 80, resize: 'vertical' }}
+                  id="nb-request" className="textarea"
+                  style={{ height: 80, resize: 'vertical' }}
                   placeholder="お客様からの要望やスタッフメモ"
                   value={form.request} onChange={e => set('request', e.target.value)}
                 />
-              </Field>
+              </div>
+
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14 }}
+                  title="初回・新規のお客様の予約は予約一覧の上部に表示されます"
+                >
+                  <input
+                    type="checkbox"
+                    checked={form.isFirstVisit}
+                    onChange={e => set('isFirstVisit', e.target.checked)}
+                    style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
+                  />
+                  <span>初回・新規のお客様</span>
+                  <span style={{ fontSize: 12, color: 'var(--sub)' }}>（予約一覧の上部に表示されます）</span>
+                </label>
+              </div>
             </div>
-            <div style={{ gridColumn: '1 / -1' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14 }}>
-                <input
-                  type="checkbox"
-                  checked={form.isFirstVisit}
-                  onChange={e => set('isFirstVisit', e.target.checked)}
-                  style={{ width: 18, height: 18, accentColor: '#E84C4C' }}
-                />
-                <span>初回・新規のお客様</span>
-                <span style={{
-                  fontSize: 11, background: '#E84C4C', color: '#fff',
-                  padding: '1px 7px', borderRadius: 10, fontWeight: 700,
-                }}>初回</span>
-                <span style={{ fontSize: 12, color: '#999' }}>（予約一覧の上部に表示されます）</span>
-              </label>
+
+            <div style={{ marginTop: 24 }}>
+              {recurOn ? (
+                <p className="note">
+                  繰り返し予約は、上の「繰り返し予約」欄の「日程を確認する」から登録します。
+                </p>
+              ) : (
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={loading}
+                  style={{ width: '100%' }}
+                >
+                  {loading ? '登録中…' : 'この内容で予約を登録する'}
+                </button>
+              )}
             </div>
-          </Grid2>
-        </Card>
+          </div>
+        </form>
 
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            width: '100%', padding: 14, background: '#C3003A', color: '#fff',
-            border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 700,
-            cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1,
-            letterSpacing: 0.5,
-          }}
-        >
-          {loading ? '登録中…' : '予約を登録する'}
-        </button>
-      </form>
+        {/* ── この日の予約状況 ── */}
+        <div className="card">
+          <div className="card-pad">
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}>
+              <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--ink)' }}>
+                この日の予約状況
+              </h2>
+              <span style={{ fontSize: 13, color: 'var(--sub)' }}>
+                {form.date}・{STORE_LABEL[form.storeId]}
+              </span>
+            </div>
+
+            {dayLoading ? (
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--sub)' }}>読み込み中…</p>
+            ) : dayRows.length === 0 ? (
+              <div className="empty">
+                この日の予約はまだありません。左のフォームからそのまま登録できます。
+              </div>
+            ) : (
+              <div>
+                {dayRows.map(row => {
+                  const hit = overlapsSelected(row);
+                  return (
+                    <div
+                      key={row.id}
+                      title={
+                        `${fmtTime(row.starts_at)}–${fmtTime(row.ends_at)} ${row.name}` +
+                        (row.menuName ? ` ${row.menuName}` : '') +
+                        (row.staffName ? ` 担当:${row.staffName}` : '') +
+                        (row.source === 'air' ? '（AirReserve取込予約）' : '') +
+                        (hit ? '／選択中の時間と重なっています' : '')
+                      }
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '8px 8px',
+                        borderBottom: '1px solid var(--line)',
+                        background: hit ? 'var(--amber-weak)' : 'transparent',
+                        borderRadius: hit ? 6 : 0,
+                        fontSize: 14,
+                      }}
+                    >
+                      <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: 'var(--ink)' }}>
+                        {fmtTime(row.starts_at)}–{fmtTime(row.ends_at)}
+                      </span>
+                      <span style={{ color: 'var(--ink)' }}>{row.name}</span>
+                      {row.menuName && <span style={{ color: 'var(--sub)', fontSize: 13 }}>{row.menuName}</span>}
+                      {row.staffName && <span style={{ color: 'var(--sub)', fontSize: 13 }}>担当: {row.staffName}</span>}
+                      <span style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {row.source === 'air' && (
+                          <span className="badge badge-purple" title="AirReserveから取り込んだ予約です">AirReserve</span>
+                        )}
+                        {row.source === 'app' && row.status === 'confirmed' && (
+                          <span className="badge badge-green" title="確定済みの予約です">確定</span>
+                        )}
+                        {row.source === 'app' && row.status === 'completed' && (
+                          <span className="badge badge-gray" title="来店が完了した予約です">完了</span>
+                        )}
+                        {row.source === 'app' && row.status === 'no_show' && (
+                          <span className="badge badge-red" title="無断キャンセルとなった予約です">無断キャンセル</span>
+                        )}
+                        {row.source === 'app' && row.depositStatus === 'pending' && (
+                          <span className="badge badge-amber" title="前金の入金がまだ確認できていません">前金未確認</span>
+                        )}
+                        {row.source === 'app' && (row.depositStatus === 'paid' || row.depositStatus === 'waived') && (
+                          <span className="badge badge-green" title="前金の確認が済んでいます">前金済</span>
+                        )}
+                      </span>
+                      {hit && (
+                        <span style={{ flexBasis: '100%', fontSize: 12, color: 'var(--amber)' }}>
+                          選択中の時間と重なっています
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── 先月の繰り返し予約から作成 ── */}
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-pad">
+          <h2 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 600, color: 'var(--ink)' }}>
+            先月の繰り返し予約から作成
+          </h2>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--sub)' }}>
+            {STORE_LABEL[form.storeId]}の{copyPrevLabel}の繰り返し予約をシリーズ単位でまとめ、
+            {copyTargetLabel}の同じ曜日・時刻（今日より後の日付のみ）へコピーします。
+          </p>
+
+          <div className="field" style={{ marginBottom: 16 }}>
+            <label className="field-label">対象月</label>
+            <div className="seg" role="group" aria-label="対象月切替">
+              <button
+                type="button"
+                className={`seg-btn${copyTargetMonth === 'this' ? ' seg-btn--active' : ''}`}
+                onClick={() => setCopyTargetMonth('this')}
+                title={`今月（${monthOffsetJst(0).m + 1}月）に作成します`}
+              >
+                今月（{monthOffsetJst(0).m + 1}月）
+              </button>
+              <button
+                type="button"
+                className={`seg-btn${copyTargetMonth === 'next' ? ' seg-btn--active' : ''}`}
+                onClick={() => setCopyTargetMonth('next')}
+                title={`来月（${monthOffsetJst(1).m + 1}月）に作成します`}
+              >
+                来月（{monthOffsetJst(1).m + 1}月）
+              </button>
+            </div>
+          </div>
+
+          {copyNote && (
+            <div
+              className="note"
+              role="status"
+              style={{ background: 'var(--green-weak)', color: 'var(--green)', marginBottom: 16 }}
+            >
+              {copyNote}
+            </div>
+          )}
+          {copyError && (
+            <div className="note note-red" role="alert" style={{ marginBottom: 16 }}>
+              {copyError}
+            </div>
+          )}
+
+          {copySeries === null ? (
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--sub)' }}>読み込み中…</p>
+          ) : copySeries.length === 0 ? (
+            <div className="empty">
+              先月の繰り返し予約はありません。上のフォームで「繰り返し予約にする」を使うと、来月このリストからコピーできるようになります。
+            </div>
+          ) : (
+            <>
+              <div style={{ overflowX: 'auto', marginBottom: 16 }}>
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>
+                        <input
+                          type="checkbox"
+                          checked={copyAllSelected}
+                          onChange={toggleCopyAllSeries}
+                          disabled={copySelectableList.length === 0}
+                          title="すべて選択・解除します"
+                        />
+                      </th>
+                      <th>お客様</th>
+                      <th>曜日・時刻</th>
+                      <th>メニュー</th>
+                      <th>担当</th>
+                      <th>先月の回数</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {copySeries.map(s => {
+                      const copyable = isCopyableSeries(s);
+                      return (
+                        <tr key={s.groupId}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={copySelected.has(s.groupId)}
+                              onChange={() => toggleCopySeries(s.groupId)}
+                              disabled={!copyable}
+                              title={
+                                copyable
+                                  ? 'この予約をコピー対象にします'
+                                  : '担当スタッフまたはお客様情報が無いためコピーできません'
+                              }
+                            />
+                          </td>
+                          <td>{s.customerName}様</td>
+                          <td style={{ fontVariantNumeric: 'tabular-nums' }}>
+                            {WEEKDAY_LABELS[s.weekday]}曜 {s.hhmm}
+                          </td>
+                          <td>{s.menuName}</td>
+                          <td>
+                            {s.staffId ? s.staffName : (
+                              <span className="badge badge-gray" title="担当スタッフが未設定のためコピーできません">未指定</span>
+                            )}
+                          </td>
+                          <td>{s.count}回</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {copyItems === null && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleCopyPreview}
+                  disabled={copyChecking || copySelected.size === 0}
+                  title={`選択した予約を${copyTargetLabel}の同じ曜日・時刻（今日より後）へ展開して確認します`}
+                >
+                  {copyChecking ? '確認中…' : `選択した予約を${copyTargetWord}に作成する`}
+                </button>
+              )}
+
+              {copyItems !== null && (
+                <div>
+                  {copyNoDates.length > 0 && (
+                    <div className="note" style={{ marginBottom: 12 }}>
+                      {copyNoDates.join('、')}は、対象月に登録できる日がないため対象外です（今日より後の日付のみが対象です）。
+                    </div>
+                  )}
+                  <p style={{ margin: '0 0 4px', fontSize: 13, color: 'var(--sub)' }}>
+                    生成予定の日程（全{copyItems.length}件・登録可{copyItems.filter(i => i.ok).length}件）
+                  </p>
+                  {copyItems.map(item => (
+                    <label
+                      key={item.key}
+                      style={{
+                        display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+                        padding: '6px 4px', borderBottom: '1px solid var(--line)',
+                        fontSize: 13, cursor: item.ok ? 'pointer' : 'default',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={item.checked}
+                        disabled={!item.ok || copySaving}
+                        onChange={() => toggleCopyItem(item.key)}
+                        style={{ width: 15, height: 15, accentColor: 'var(--accent)' }}
+                      />
+                      <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+                        {fmtMdW(item.dateStr)} {item.hhmm}–{fmtTime(item.endIso)}
+                      </span>
+                      <span>{item.label}様</span>
+                      {item.ok ? (
+                        <span className="badge badge-green">○ 登録可</span>
+                      ) : (
+                        <span className="badge badge-amber" title={item.reason ?? undefined}>
+                          × スキップ（重複あり）
+                        </span>
+                      )}
+                    </label>
+                  ))}
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={handleCopyApply}
+                      disabled={copySaving || copySelectedCount === 0}
+                      title="チェックした日程をまとめて登録します"
+                    >
+                      {copySaving ? '登録中…' : `${copySelectedCount}件を登録する`}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => { setCopyItems(null); setCopyNoDates([]); }}
+                      disabled={copySaving}
+                      title="日程の確認をやり直します"
+                    >
+                      選び直す
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── 共通スタイル ──────────────────────────────
+// ── 補助 ──────────────────────────────
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{
-      background: '#fff', borderRadius: 12, padding: 24,
-      boxShadow: '0 1px 5px rgba(0,0,0,0.07)', marginBottom: 20,
-    }}>
-      <h3 style={{
-        margin: '0 0 18px', fontSize: 14, fontWeight: 700, color: '#C3003A',
-        paddingBottom: 10, borderBottom: '1px solid #EEE',
-      }}>{title}</h3>
-      {children}
-    </div>
-  );
+function RequiredBadge() {
+  return <span className="badge badge-red" title="入力必須の項目です">必須</span>;
 }
-
-function Grid2({ children }: { children: React.ReactNode }) {
-  return <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>{children}</div>;
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label style={{ display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 600, color: '#444' }}>
-        {label}
-      </label>
-      {children}
-    </div>
-  );
-}
-
-const base: React.CSSProperties = {
-  width: '100%', padding: '10px 12px', border: '1px solid #DDD',
-  borderRadius: 8, fontSize: 14, background: '#FAFAFA', boxSizing: 'border-box',
-  outline: 'none',
-};
-const inp: React.CSSProperties = { ...base };
-const sel: React.CSSProperties = { ...base, appearance: 'auto' };

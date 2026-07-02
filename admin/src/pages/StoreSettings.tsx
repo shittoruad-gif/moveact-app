@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
 // 店舗設定
-// (a) 営業時間: store_business_hours を店舗×曜日の表で編集・保存
-// (b) 臨時休業/特別営業: store_closed_days の一覧（今日以降）＋追加・削除
+// (a) 営業時間: store_business_hours を店舗×曜日の表で編集・保存（保存ボタンは表の下に1つ）
+// (b) 臨時休業/特別営業: store_closed_days の一覧（今日以降）＋追加・削除（別カード）
 // ※ 必ず store_id で絞る（他店舗のデータを巻き込まない）
 // ※ 日付はJST基準（epoch計算で今日を求める）。open/close は 'HH:MM' のTEXT
 
@@ -200,7 +200,7 @@ export function StoreSettings() {
 
   const handleDeleteClosedDay = async (row: ClosedDayRow) => {
     const label = row.is_closed ? '臨時休業' : '特別営業時間';
-    if (!window.confirm(`${fmtDate(row.date)} の${label}を削除しますか？`)) return;
+    if (!window.confirm(`${fmtDate(row.date)} の${label}を削除します。よろしいですか？`)) return;
 
     setDeleting(row.id);
     const { error: err } = await supabase.from('store_closed_days').delete().eq('id', row.id);
@@ -214,263 +214,222 @@ export function StoreSettings() {
   };
 
   return (
-    <div>
-      <h2 style={{ margin: '0 0 24px', fontSize: 22, fontWeight: 700, color: '#C3003A' }}>
-        店舗設定
-      </h2>
+    <div className="page">
+      <div className="page-head">
+        <h2 className="page-title">店舗設定</h2>
+        <p className="page-help">店舗の営業時間と臨時休業を設定します。ここでの設定はネット予約の受付時間に反映されます。</p>
+      </div>
 
       {/* 店舗切り替え */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-        {STORE_ORDER.map(s => (
-          <button
-            key={s}
-            onClick={() => setStoreId(s)}
-            style={{
-              padding: '8px 18px', borderRadius: 8, fontSize: 14, fontWeight: 600,
-              border: '1px solid #C3003A', cursor: 'pointer',
-              background: storeId === s ? '#C3003A' : '#fff',
-              color: storeId === s ? '#fff' : '#C3003A',
-            }}
-          >
-            {STORE_NAMES[s]}
-          </button>
-        ))}
+      <div className="toolbar" style={{ marginBottom: 16 }}>
+        <div className="seg">
+          {STORE_ORDER.map(s => (
+            <button
+              key={s}
+              type="button"
+              className={`seg-btn${storeId === s ? ' seg-btn--active' : ''}`}
+              onClick={() => setStoreId(s)}
+              title={`${STORE_NAMES[s]}の設定を表示します`}
+            >
+              {STORE_NAMES[s]}
+            </button>
+          ))}
+        </div>
       </div>
 
       {success && (
-        <div style={{
-          padding: '12px 16px', background: '#E8F5E9', border: '1px solid #A5D6A7',
-          borderRadius: 8, marginBottom: 20, color: '#2E7D32', fontWeight: 600, fontSize: 14,
-        }}>
-          ✅ {success}
+        <div className="note" style={{ background: 'var(--green-weak)', color: 'var(--green)', marginBottom: 16 }}>
+          {success}
         </div>
       )}
       {error && (
-        <div style={{
-          padding: '12px 16px', background: '#FFEBEE', border: '1px solid #EF9A9A',
-          borderRadius: 8, marginBottom: 20, color: '#C62828', fontSize: 14,
-        }}>
-          ⚠️ {error}
+        <div className="note" style={{ background: 'var(--red-weak)', color: 'var(--red)', marginBottom: 16 }}>
+          {error}
         </div>
       )}
 
       {/* (a) 営業時間 */}
-      <Card title={`営業時間（${STORE_NAMES[storeId]}・曜日別）`}>
+      <div className="card card-pad" style={{ marginBottom: 16 }}>
+        <h3 style={{ margin: '0 0 16px', fontSize: 15, fontWeight: 600 }}>
+          営業時間（{STORE_NAMES[storeId]}・曜日別）
+        </h3>
+
         {hoursLoading ? (
-          <div style={{ padding: 20, textAlign: 'center', color: '#999', fontSize: 14 }}>読み込み中…</div>
+          <div style={{ padding: 16, textAlign: 'center', color: 'var(--sub)', fontSize: 13 }}>読み込み中…</div>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ background: '#C3003A', color: '#fff' }}>
-                <th style={thStyle}>曜日</th>
-                <th style={thStyle}>定休日</th>
-                <th style={thStyle}>開店</th>
-                <th style={thStyle}>閉店</th>
-              </tr>
-            </thead>
-            <tbody>
-              {hours.map(h => (
-                <tr key={h.day_of_week} style={{ borderBottom: '1px solid #eee' }}>
-                  <td style={{ ...tdStyle, fontWeight: 600, color: h.day_of_week === 0 ? '#C62828' : h.day_of_week === 6 ? '#1565C0' : '#333' }}>
-                    {DOW_LABELS[h.day_of_week]}曜
-                  </td>
-                  <td style={tdStyle}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
-                      <input
-                        type="checkbox"
-                        checked={h.is_closed}
-                        onChange={e => setHour(h.day_of_week, { is_closed: e.target.checked })}
-                        style={{ width: 16, height: 16, accentColor: '#C3003A' }}
-                      />
-                      <span style={{ color: h.is_closed ? '#C62828' : '#999' }}>
-                        {h.is_closed ? '定休日' : '営業'}
-                      </span>
-                    </label>
-                  </td>
-                  <td style={tdStyle}>
-                    <input
-                      type="time" style={{ ...inp, width: 130, opacity: h.is_closed ? 0.4 : 1 }}
-                      value={h.open_time} disabled={h.is_closed}
-                      onChange={e => setHour(h.day_of_week, { open_time: e.target.value })}
-                    />
-                  </td>
-                  <td style={tdStyle}>
-                    <input
-                      type="time" style={{ ...inp, width: 130, opacity: h.is_closed ? 0.4 : 1 }}
-                      value={h.close_time} disabled={h.is_closed}
-                      onChange={e => setHour(h.day_of_week, { close_time: e.target.value })}
-                    />
-                  </td>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>曜日</th>
+                  <th>定休日</th>
+                  <th>開店</th>
+                  <th>閉店</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {hours.map(h => (
+                  <tr key={h.day_of_week}>
+                    <td style={{ fontWeight: 600 }}>{DOW_LABELS[h.day_of_week]}曜</td>
+                    <td>
+                      <label
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}
+                        title="チェックすると、この曜日はネット予約を受け付けません"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={h.is_closed}
+                          onChange={e => setHour(h.day_of_week, { is_closed: e.target.checked })}
+                          style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
+                        />
+                        <span style={{ color: h.is_closed ? 'var(--ink)' : 'var(--sub)' }}>
+                          {h.is_closed ? '定休日' : '営業'}
+                        </span>
+                      </label>
+                    </td>
+                    <td>
+                      <input
+                        type="time" className="input" style={{ width: 120 }}
+                        value={h.open_time} disabled={h.is_closed}
+                        onChange={e => setHour(h.day_of_week, { open_time: e.target.value })}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="time" className="input" style={{ width: 120 }}
+                        value={h.close_time} disabled={h.is_closed}
+                        onChange={e => setHour(h.day_of_week, { close_time: e.target.value })}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
 
-        <button
-          onClick={handleSaveHours}
-          disabled={saving || hoursLoading}
-          style={{
-            marginTop: 16, width: '100%', padding: 12, background: '#C3003A', color: '#fff',
-            border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700,
-            cursor: saving || hoursLoading ? 'not-allowed' : 'pointer',
-            opacity: saving || hoursLoading ? 0.7 : 1,
-          }}
-        >
-          {saving ? '保存中…' : '営業時間を保存する'}
-        </button>
-      </Card>
+        <div style={{ marginTop: 16 }}>
+          <button
+            className="btn btn-primary"
+            onClick={handleSaveHours}
+            disabled={saving || hoursLoading}
+          >
+            {saving ? '保存中…' : '営業時間を保存する'}
+          </button>
+        </div>
+      </div>
 
       {/* (b) 臨時休業・特別営業 */}
-      <Card title={`臨時休業・特別営業（${STORE_NAMES[storeId]}・本日以降）`}>
+      <div className="card card-pad">
+        <h3 style={{ margin: '0 0 16px', fontSize: 15, fontWeight: 600 }}>
+          臨時休業・特別営業（{STORE_NAMES[storeId]}・本日以降）
+        </h3>
+
         <form onSubmit={handleAddClosedDay} style={{ marginBottom: 20 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12, alignItems: 'end' }}>
-            <Field label="日付 *">
-              <input type="date" style={inp} value={closedForm.date} onChange={e => setClosed('date', e.target.value)} />
-            </Field>
-            <Field label="種別 *">
-              <select style={sel} value={closedForm.mode} onChange={e => setClosed('mode', e.target.value as 'closed' | 'special')}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+              gap: 12,
+              alignItems: 'end',
+            }}
+          >
+            <div className="field">
+              <label className="field-label">日付（必須）</label>
+              <input type="date" className="input" value={closedForm.date} onChange={e => setClosed('date', e.target.value)} />
+            </div>
+            <div className="field">
+              <label className="field-label">種別（必須）</label>
+              <select
+                className="select"
+                value={closedForm.mode}
+                onChange={e => setClosed('mode', e.target.value as 'closed' | 'special')}
+                title="終日休業＝その日は予約を受け付けません／特別営業時間＝通常と異なる時間で営業します"
+              >
                 <option value="closed">終日休業</option>
                 <option value="special">特別営業時間</option>
               </select>
-            </Field>
-            <Field label="開店">
+            </div>
+            <div className="field">
+              <label className="field-label">開店</label>
               <input
-                type="time" style={{ ...inp, opacity: closedForm.mode === 'closed' ? 0.4 : 1 }}
+                type="time" className="input"
                 value={closedForm.openTime} disabled={closedForm.mode === 'closed'}
                 onChange={e => setClosed('openTime', e.target.value)}
               />
-            </Field>
-            <Field label="閉店">
+            </div>
+            <div className="field">
+              <label className="field-label">閉店</label>
               <input
-                type="time" style={{ ...inp, opacity: closedForm.mode === 'closed' ? 0.4 : 1 }}
+                type="time" className="input"
                 value={closedForm.closeTime} disabled={closedForm.mode === 'closed'}
                 onChange={e => setClosed('closeTime', e.target.value)}
               />
-            </Field>
+            </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'end', marginTop: 12 }}>
-            <Field label="理由・メモ">
+            <div className="field">
+              <label className="field-label">理由・メモ</label>
               <input
-                type="text" style={inp} placeholder="例）お盆休み / 研修のため午前のみ営業"
+                type="text" className="input" placeholder="例）お盆休み / 研修のため午前のみ営業"
                 value={closedForm.reason} onChange={e => setClosed('reason', e.target.value)}
               />
-            </Field>
-            <button
-              type="submit"
-              disabled={adding}
-              style={{
-                padding: '10px 24px', background: '#C3003A', color: '#fff',
-                border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 700,
-                cursor: adding ? 'not-allowed' : 'pointer', opacity: adding ? 0.7 : 1,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {adding ? '登録中…' : '追加する'}
+            </div>
+            <button type="submit" className="btn btn-primary" disabled={adding} style={{ whiteSpace: 'nowrap' }}>
+              {adding
+                ? '登録中…'
+                : closedForm.mode === 'closed' ? '臨時休業を登録する' : '特別営業を登録する'}
             </button>
           </div>
         </form>
 
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ background: '#C3003A', color: '#fff' }}>
-              <th style={thStyle}>日付</th>
-              <th style={thStyle}>種別</th>
-              <th style={thStyle}>時間</th>
-              <th style={thStyle}>理由</th>
-              <th style={thStyle}>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {closedDays.map(d => (
-              <tr key={d.id} style={{ borderBottom: '1px solid #eee' }}>
-                <td style={{ ...tdStyle, fontWeight: 600 }}>{fmtDate(d.date)}</td>
-                <td style={tdStyle}>
-                  <span style={{
-                    padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600,
-                    background: d.is_closed ? '#FFEBEE' : '#E3F2FD',
-                    color: d.is_closed ? '#C62828' : '#1565C0',
-                  }}>
-                    {d.is_closed ? '終日休業' : '特別営業'}
-                  </span>
-                </td>
-                <td style={tdStyle}>
-                  {d.is_closed ? '-' : `${d.open_time ?? '?'}〜${d.close_time ?? '?'}`}
-                </td>
-                <td style={tdStyle}>{d.reason ?? '-'}</td>
-                <td style={tdStyle}>
-                  <button
-                    onClick={() => handleDeleteClosedDay(d)}
-                    disabled={deleting === d.id}
-                    style={{
-                      color: '#fff', border: 'none', borderRadius: 6, padding: '6px 12px',
-                      fontSize: 12, fontWeight: 600, background: '#999',
-                      cursor: deleting === d.id ? 'not-allowed' : 'pointer',
-                    }}
-                  >
-                    削除
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {closedDays.length === 0 && (
-              <tr>
-                <td colSpan={5} style={{ ...tdStyle, textAlign: 'center', color: '#999' }}>
-                  本日以降の登録はありません
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </Card>
+        {closedDays.length === 0 ? (
+          <div className="empty">本日以降の臨時休業・特別営業はありません。上のフォームから登録できます。</div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>日付</th>
+                  <th>種別</th>
+                  <th>時間</th>
+                  <th>理由</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {closedDays.map(d => (
+                  <tr key={d.id}>
+                    <td style={{ fontWeight: 600 }}>{fmtDate(d.date)}</td>
+                    <td>
+                      <span
+                        className={`badge ${d.is_closed ? 'badge-red' : 'badge-amber'}`}
+                        title={d.is_closed ? 'この日は終日予約を受け付けません' : 'この日は通常と異なる時間で営業します'}
+                      >
+                        {d.is_closed ? '終日休業' : '特別営業'}
+                      </span>
+                    </td>
+                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>
+                      {d.is_closed ? '-' : `${d.open_time ?? '?'}〜${d.close_time ?? '?'}`}
+                    </td>
+                    <td>{d.reason ?? '-'}</td>
+                    <td>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        onClick={() => handleDeleteClosedDay(d)}
+                        disabled={deleting === d.id}
+                        title="この登録を削除します（通常の営業時間に戻ります）"
+                      >
+                        削除
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
-
-// ── 共通スタイル ──────────────────────────────
-
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{
-      background: '#fff', borderRadius: 12, padding: 24,
-      boxShadow: '0 1px 5px rgba(0,0,0,0.07)', marginBottom: 20,
-    }}>
-      <h3 style={{
-        margin: '0 0 18px', fontSize: 14, fontWeight: 700, color: '#C3003A',
-        paddingBottom: 10, borderBottom: '1px solid #EEE',
-      }}>{title}</h3>
-      {children}
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label style={{ display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 600, color: '#444' }}>
-        {label}
-      </label>
-      {children}
-    </div>
-  );
-}
-
-const base: React.CSSProperties = {
-  width: '100%', padding: '10px 12px', border: '1px solid #DDD',
-  borderRadius: 8, fontSize: 14, background: '#FAFAFA', boxSizing: 'border-box',
-  outline: 'none',
-};
-const inp: React.CSSProperties = { ...base };
-const sel: React.CSSProperties = { ...base, appearance: 'auto' };
-
-const thStyle: React.CSSProperties = {
-  padding: '12px 16px',
-  textAlign: 'left',
-  fontSize: 13,
-  fontWeight: 600,
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '12px 16px',
-  fontSize: 14,
-};

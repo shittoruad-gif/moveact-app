@@ -14,64 +14,61 @@ export function Login() {
 
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
-      setError(error.message);
+      setError(
+        error.message.toLowerCase().includes('invalid login credentials')
+          ? 'メールアドレスかパスワードが違います。ご確認のうえ、もう一度お試しください。'
+          : 'ログインできませんでした。しばらく時間をおいて、もう一度お試しください。'
+      );
     }
     setLoading(false);
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F5F5F7' }}>
-      <form onSubmit={handleLogin} style={{ background: '#fff', borderRadius: 16, padding: 40, width: 400, boxShadow: '0 2px 12px rgba(0,0,0,0.1)' }}>
-        <h1 style={{ fontSize: 28, fontWeight: 700, color: '#C3003A', textAlign: 'center', marginBottom: 8 }}>Moveact</h1>
-        <p style={{ textAlign: 'center', color: '#666', marginBottom: 32, fontSize: 14 }}>管理画面ログイン</p>
+    <div className="login-page">
+      <div className="login-card card card-pad">
+        <h1 className="login-logo">
+          MOVEACT <span>管理</span>
+        </h1>
+        <p className="login-sub">スタッフ・管理者専用の管理画面です</p>
 
         {error && (
-          <div style={{ background: '#FFEBEE', color: '#D32F2F', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>
+          <div className="note note-red" role="alert" style={{ marginBottom: 16 }}>
             {error}
           </div>
         )}
 
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>メールアドレス</label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #ddd', fontSize: 14, boxSizing: 'border-box' }}
-            required
-          />
-        </div>
+        <form onSubmit={handleLogin} style={{ display: 'grid', gap: 16 }}>
+          <div className="field">
+            <label className="field-label" htmlFor="login-email">メールアドレス</label>
+            <input
+              id="login-email"
+              className="input"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </div>
 
-        <div style={{ marginBottom: 24 }}>
-          <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>パスワード</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #ddd', fontSize: 14, boxSizing: 'border-box' }}
-            required
-          />
-        </div>
+          <div className="field">
+            <label className="field-label" htmlFor="login-password">パスワード</label>
+            <input
+              id="login-password"
+              className="input"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
 
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            width: '100%',
-            padding: 14,
-            background: '#C3003A',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 8,
-            fontSize: 16,
-            fontWeight: 600,
-            cursor: loading ? 'not-allowed' : 'pointer',
-            opacity: loading ? 0.7 : 1,
-          }}
-        >
-          {loading ? 'ログイン中...' : 'ログイン'}
-        </button>
-      </form>
+          <button type="submit" className="btn btn-primary" disabled={loading} style={{ width: '100%' }}>
+            {loading ? 'ログインしています…' : 'ログインする'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

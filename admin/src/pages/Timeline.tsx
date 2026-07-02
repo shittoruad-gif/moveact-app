@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase';
 // サロンボード風タイムライン予約表（admin独自実装）
 //   縦軸: 営業時間を15分=18pxの行に。横軸: スタッフ列。
 //   6クエリ並列ロード: roster / business_hours / closed_days / app_bookings / staff_unavailability / airreserve_events
+//   見た目はデザインシステム（index.cssの--ink/--sub/--line等とbadge/btn/modalクラス）に準拠。
 // ─────────────────────────────────────────────────────────────
 
 type StoreId = 'tamashima' | 'kanamitsu';
@@ -126,6 +127,19 @@ function isoToJstParts(iso: string): { date: string; time: string } {
 }
 
 // ─────────────────────────────────────────────────────────────
+// ステータス→表示（左ボーダー色・凡例と統一）
+//   確定=green / 前金未確認=amber / 完了=gray / 無断=red / キャンセル=薄灰
+// ─────────────────────────────────────────────────────────────
+function bookingVisual(b: BookingRow): { color: string; label: string } {
+  if (b.status === 'cancelled') return { color: 'var(--line)', label: 'キャンセル' };
+  if (b.status === 'no_show') return { color: 'var(--red)', label: '無断キャンセル' };
+  if (b.status === 'completed') return { color: 'var(--sub)', label: '完了' };
+  if (b.status === 'tentative' || b.status === 'pending') return { color: 'var(--amber)', label: '仮予約' };
+  if (b.deposit_status === 'pending') return { color: 'var(--amber)', label: '前金未確認' };
+  return { color: 'var(--green)', label: '確定' };
+}
+
+// ─────────────────────────────────────────────────────────────
 // メイン
 // ─────────────────────────────────────────────────────────────
 export function Timeline() {
@@ -140,7 +154,7 @@ export function Timeline() {
   const [unavail, setUnavail] = useState<UnavailRow[]>([]);
   const [airEvents, setAirEvents] = useState<AirReserveRow[]>([]);
   const [loading, setLoading] = useState(false);
-  // 予約ブロッククリックで開く詳細・編集モーダル（AirReserveブロックは対象外）
+  // 予約ブロッククリックで開く変更モーダル（AirReserveブロックは対象外）
   const [editing, setEditing] = useState<BookingRow | null>(null);
 
   // 現在時刻（分）— 60秒ごと更新
@@ -244,52 +258,59 @@ export function Timeline() {
     storeFilter === 'all' ? STORE_ORDER : [storeFilter];
 
   return (
-    <div style={{ fontFamily: 'var(--tl-font)', color: 'var(--color-text)' }}>
-      {/* タイトル + 店舗タブ */}
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: 'var(--color-primary-dark)' }}>
-          予約表
-        </h2>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+    <div className="page">
+      {/* タイトル + ページ説明 */}
+      <div className="page-head">
+        <div>
+          <h2 className="page-title">予約表</h2>
+          <p className="page-help">
+            スタッフごとの予約状況を確認し、予約をクリックすると変更・キャンセルができます。空き枠をクリックすると新規予約を登録できます。
+          </p>
+        </div>
+      </div>
+
+      {/* 店舗切替 */}
+      <div className="toolbar" style={{ marginBottom: 16, flexWrap: 'wrap' }}>
+        <div className="seg" title="表示する店舗を切り替えます">
           {(['all', 'tamashima', 'kanamitsu'] as const).map(s => (
             <button
               key={s}
+              type="button"
+              className={`seg-btn${storeFilter === s ? ' seg-btn--active' : ''}`}
               onClick={() => setStoreFilter(s)}
-              style={{
-                padding: '5px 14px', borderRadius: 20, border: 'none', cursor: 'pointer',
-                fontSize: 13, fontWeight: storeFilter === s ? 700 : 400,
-                background: storeFilter === s ? 'var(--color-primary)' : 'var(--color-bg-sub)',
-                color: storeFilter === s ? '#fff' : 'var(--color-text-sub)',
-                transition: 'all 0.15s',
-              }}
             >{s === 'all' ? '全店' : STORE_NAMES[s as StoreId]}</button>
           ))}
         </div>
       </div>
 
       {/* 日付ナビ */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16,
-        background: 'var(--color-bg)', padding: '10px 16px', borderRadius: 10,
-        border: '1px solid var(--color-border)',
-      }}>
-        <button onClick={() => moveDate(-1)} style={navBtn}>‹ 前日</button>
+      <div className="card card-pad day-nav" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <button type="button" className="btn btn-sm" onClick={() => moveDate(-1)} title="前の日の予約表を表示します">前日</button>
         <button
+          type="button"
+          className={`btn btn-sm${isToday ? ' btn-primary' : ''}`}
           onClick={() => setDate(todayDate)}
-          style={{ ...navBtn, background: isToday ? 'var(--color-primary)' : 'var(--color-bg-sub)', color: isToday ? '#fff' : 'var(--color-text-sub)' }}
+          title="今日の予約表を表示します"
         >今日</button>
-        <DateColorSpan date={date} />
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--color-text-mute)' }}>
+        <span style={{ flex: 1, textAlign: 'center' }}>
+          <DateColorSpan date={date} />
+        </span>
+        <span
+          style={{ fontSize: 13, color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}
+          title="この日の予約件数です（キャンセルを除く）"
+        >
           {bookings.filter(b => b.status !== 'cancelled').length}件
         </span>
-        <button onClick={() => moveDate(1)} style={navBtn}>翌日 ›</button>
+        <button type="button" className="btn btn-sm" onClick={() => moveDate(1)} title="次の日の予約表を表示します">翌日</button>
       </div>
 
       {/* 凡例 */}
       <Legend />
 
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 60, color: 'var(--color-text-mute)' }}>読み込み中…</div>
+        <div className="card">
+          <div className="empty">読み込み中です…</div>
+        </div>
       ) : (
         storesToRender.map(store => (
           <StoreBoard
@@ -311,7 +332,7 @@ export function Timeline() {
         ))
       )}
 
-      {/* 予約詳細・編集モーダル */}
+      {/* 予約変更モーダル */}
       {editing && (
         <BookingEditModal
           b={editing}
@@ -410,47 +431,42 @@ function StoreBoard({
   };
 
   return (
-    <div style={{ marginBottom: 28 }}>
+    <div style={{ marginBottom: 24 }}>
       {showStoreLabel && (
-        <div style={{
-          display: 'inline-block', marginBottom: 8, padding: '4px 14px',
-          background: 'var(--color-primary-tint)', color: 'var(--color-primary-dark)',
-          borderRadius: 6, fontSize: 14, fontWeight: 700,
-          border: '1px solid var(--color-primary-light)',
-        }}>
+        <div style={{ marginBottom: 8, fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>
           {STORE_NAMES[store]}
         </div>
       )}
 
       {storeClosed && (
-        <div style={{ fontSize: 12, color: 'var(--color-text-mute)', marginBottom: 6 }}>
-          ※ 本日は休業日です{closedReason ? `（${closedReason}）` : ''}（参考表示）
+        <div className="note" style={{ marginBottom: 8 }}>
+          この日は休業日です{closedReason ? `（${closedReason}）` : ''}。参考として予約枠を表示しています。
         </div>
       )}
 
-      <div style={{
-        border: '1px solid var(--color-border)', borderRadius: 8, overflow: 'auto',
-        background: 'var(--color-bg)', maxWidth: '100%',
-      }}>
+      <div className="card" style={{ overflow: 'auto', maxWidth: '100%' }}>
         {/* 横スクロール領域 */}
         <div style={{ display: 'inline-block', minWidth: '100%' }}>
           {/* ヘッダ行（スタッフ名） */}
           <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 3 }}>
             <div style={{
-              width: TIME_COL_W, flexShrink: 0, height: 34,
-              background: 'var(--color-bg-sub)', borderBottom: '1px solid var(--color-border-strong)',
-              borderRight: '1px solid var(--color-border)',
+              width: TIME_COL_W, flexShrink: 0, height: 36,
+              background: 'var(--surface)',
+              borderBottom: '1px solid var(--line)',
+              borderRight: '1px solid var(--line)',
               position: 'sticky', left: 0, zIndex: 4,
+              boxSizing: 'border-box',
             }} />
             {columns.map((col, i) => (
               <div key={col.staffId ?? `unassigned-${i}`} style={{
-                width: STAFF_COL_W, flexShrink: 0, height: 34,
+                width: STAFF_COL_W, flexShrink: 0, height: 36,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 13, fontWeight: 700,
-                color: col.staffId ? 'var(--color-text)' : 'var(--color-text-mute)',
-                background: 'var(--color-bg-sub)',
-                borderBottom: '1px solid var(--color-border-strong)',
-                borderRight: '1px solid var(--color-border)',
+                fontSize: 13, fontWeight: 600,
+                color: col.staffId ? 'var(--ink)' : 'var(--sub)',
+                background: 'var(--surface)',
+                borderBottom: '1px solid var(--line)',
+                borderRight: '1px solid var(--line)',
+                boxSizing: 'border-box',
               }}>
                 {col.name}
               </div>
@@ -462,14 +478,15 @@ function StoreBoard({
             {/* 時刻軸列 */}
             <div style={{
               width: TIME_COL_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 2,
-              background: 'var(--color-bg)', borderRight: '1px solid var(--color-border)',
-              height: bodyHeight,
+              background: 'var(--surface)', borderRight: '1px solid var(--line)',
+              height: bodyHeight, boxSizing: 'border-box',
             }}>
               {hourMarks.map(m => (
                 <div key={m} style={{
                   position: 'absolute', top: (m - openMin) * PX_PER_MIN, left: 0, right: 0,
-                  fontSize: 11, color: 'var(--color-text-sub)', textAlign: 'right',
+                  fontSize: 12, color: 'var(--sub)', textAlign: 'right',
                   paddingRight: 6, transform: 'translateY(-1px)',
+                  fontVariantNumeric: 'tabular-nums',
                 }}>
                   {minToHHMM(m)}
                 </div>
@@ -495,8 +512,9 @@ function StoreBoard({
                   style={{
                     width: STAFF_COL_W, flexShrink: 0, position: 'relative',
                     height: bodyHeight,
-                    borderRight: '1px solid var(--color-border)',
-                    background: storeClosed ? 'var(--color-bg-muted)' : 'var(--color-bg)',
+                    borderRight: '1px solid var(--line)',
+                    background: storeClosed ? 'var(--bg)' : 'var(--surface)',
+                    boxSizing: 'border-box',
                   }}
                 >
                   {/* 15分グリッド線（クリックで新規予約） */}
@@ -507,16 +525,16 @@ function StoreBoard({
                       <div
                         key={ri}
                         onClick={() => handleEmptyClick(col, slotMin)}
-                        title={`${minToHHMM(slotMin)} に新規予約`}
+                        title={`${minToHHMM(slotMin)} クリックで新規予約`}
                         style={{
                           position: 'absolute', top: ri * ROW_PX, left: 0, right: 0,
                           height: ROW_PX, boxSizing: 'border-box',
                           borderTop: isHourLine
-                            ? '1px solid var(--color-border-strong)'
-                            : '1px solid var(--color-bg-sub)',
+                            ? '1px solid var(--line)'
+                            : '1px solid var(--bg)',
                           cursor: 'pointer',
                         }}
-                        onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-primary-tint)'; }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'var(--accent-weak)'; }}
                         onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                       />
                     );
@@ -532,7 +550,7 @@ function StoreBoard({
                     <AirReserveBlock key={a.id} ev={a} openMin={openMin} closeMin={closeMin} />
                   ))}
 
-                  {/* 予約ブロック（クリックで詳細・編集） */}
+                  {/* 予約ブロック（クリックで変更・キャンセル） */}
                   {colBookings.map(b => (
                     <ReservationBlock key={b.id} b={b} openMin={openMin} closeMin={closeMin} onClick={() => onBookingClick(b)} />
                   ))}
@@ -545,12 +563,12 @@ function StoreBoard({
               <div style={{
                 position: 'absolute', left: TIME_COL_W, right: 0,
                 top: (nowMin - openMin) * PX_PER_MIN, height: 0,
-                borderTop: '2px solid var(--color-primary)', zIndex: 5, pointerEvents: 'none',
+                borderTop: '1px solid var(--accent)', zIndex: 5, pointerEvents: 'none',
               }}>
                 <span style={{
                   position: 'absolute', left: -TIME_COL_W, top: -8, width: TIME_COL_W - 4,
-                  textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--color-primary)',
-                  background: 'var(--color-bg)',
+                  textAlign: 'right', fontSize: 10, fontWeight: 600, color: 'var(--accent)',
+                  background: 'var(--surface)', fontVariantNumeric: 'tabular-nums',
                 }}>
                   {minToHHMM(nowMin)}
                 </span>
@@ -561,8 +579,8 @@ function StoreBoard({
       </div>
 
       {columns.length === 1 && (
-        <div style={{ fontSize: 12, color: 'var(--color-text-mute)', marginTop: 6 }}>
-          ※ この店舗に登録スタッフが見つかりません（未割当レーンのみ表示）。
+        <div style={{ fontSize: 12, color: 'var(--sub)', marginTop: 6 }}>
+          この店舗に登録スタッフが見つからないため、未割当レーンのみ表示しています。
         </div>
       )}
     </div>
@@ -570,7 +588,7 @@ function StoreBoard({
 }
 
 // ─────────────────────────────────────────────────────────────
-// 予約ブロック
+// 予約ブロック（surface地 + 左3pxステータス色ボーダー）
 // ─────────────────────────────────────────────────────────────
 function ReservationBlock({ b, openMin, closeMin, onClick }: { b: BookingRow; openMin: number; closeMin: number; onClick: () => void }) {
   const startMin = dateToMinOfDay(b.starts_at);
@@ -589,66 +607,53 @@ function ReservationBlock({ b, openMin, closeMin, onClick }: { b: BookingRow; op
   const height = Math.max(ROW_PX, Math.min(rawH, maxH));
 
   const isCancelled = b.status === 'cancelled';
-  const isTentative = b.status === 'tentative' || b.status === 'pending';
-  const isDone = b.status === 'completed' || b.status === 'no_show';
-  const isFirst = b.is_first_visit;
-
-  let accent: string;
-  let bg: string;
-  if (isCancelled) {
-    accent = 'var(--status-cancel)'; bg = 'var(--color-bg-sub)';
-  } else if (isDone) {
-    accent = 'var(--status-done)'; bg = 'var(--color-bg-sub)';
-  } else if (isTentative) {
-    accent = 'var(--status-tentative)'; bg = '#FFF6E8';
-  } else if (isFirst) {
-    accent = 'var(--status-new)'; bg = 'var(--status-new-bg)';
-  } else {
-    accent = 'var(--status-repeat)'; bg = 'var(--status-repeat-bg)';
-  }
-
+  const visual = bookingVisual(b);
+  const guestName = b.guest_name ?? '会員予約';
   const compact = height < 36;
 
   return (
     <div
-      title={`${fmtClock(b.starts_at)} ${b.guest_name ?? ''} / ${b.menu?.name ?? ''}（クリックで詳細・編集）`}
+      title={`${fmtClock(b.starts_at)} ${guestName} / ${b.menu?.name ?? 'メニュー不明'} / ${visual.label}（クリックで変更・キャンセルができます）`}
       onClick={e => { e.stopPropagation(); onClick(); }}
       style={{
         position: 'absolute', top, left: 2, right: 2, height: height - 2,
-        background: bg, borderLeft: `3px solid ${accent}`,
+        background: 'var(--surface)',
+        border: '1px solid var(--line)',
+        borderLeft: `3px solid ${visual.color}`,
         borderRadius: 4, boxSizing: 'border-box',
-        padding: '2px 5px', overflow: 'hidden', zIndex: 1,
-        boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
-        opacity: isCancelled ? 0.6 : 1,
-        cursor: 'pointer', lineHeight: 1.3,
+        padding: '2px 6px', overflow: 'hidden', zIndex: 1,
+        boxShadow: 'var(--shadow)',
+        opacity: isCancelled ? 0.55 : 1,
+        cursor: 'pointer', lineHeight: 1.35,
       }}
-      onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 2px 6px rgba(0,0,0,0.18)'; }}
-      onMouseLeave={e => { e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.08)'; }}
     >
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 4,
-        fontSize: 11, fontWeight: 700, color: accent,
-        textDecoration: isCancelled ? 'line-through' : 'none',
+        display: 'flex', alignItems: 'baseline', gap: 4,
+        fontSize: 11, color: 'var(--sub)', fontVariantNumeric: 'tabular-nums',
       }}>
         <span>{fmtClock(b.starts_at)}</span>
-        {isFirst && !isCancelled && (
+        {b.is_first_visit && !isCancelled && (
+          <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent)' }}>初回</span>
+        )}
+        {compact && (
           <span style={{
-            fontSize: 9, fontWeight: 800, color: '#fff', background: 'var(--status-new)',
-            borderRadius: 3, padding: '0 3px', lineHeight: '13px',
-          }}>初</span>
+            fontSize: 11, fontWeight: 600, color: 'var(--ink)',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {guestName}
+          </span>
         )}
       </div>
       {!compact && (
         <>
           <div style={{
-            fontSize: 12, fontWeight: 700, color: 'var(--color-text)',
+            fontSize: 13, fontWeight: 600, color: 'var(--ink)',
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            textDecoration: isCancelled ? 'line-through' : 'none',
           }}>
-            {b.guest_name ?? '（名前未記入）'}
+            {guestName}
           </div>
           <div style={{
-            fontSize: 11, color: 'var(--color-text-sub)',
+            fontSize: 12, color: 'var(--sub)',
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>
             {b.menu?.name ?? 'メニュー不明'}
@@ -660,7 +665,7 @@ function ReservationBlock({ b, openMin, closeMin, onClick }: { b: BookingRow; op
 }
 
 // ─────────────────────────────────────────────────────────────
-// 予約詳細・編集モーダル
+// 予約変更モーダル
 //   保存は UPDATE app_bookings 一発。二重予約は DB の EXCLUDE 制約
 //   （バッファ=入れ替え時間込み）が最終防衛。AirReserve取込予約とは
 //   制約が効かないため、保存前にアプリ側で重複確認する（NewBookingと同方式）。
@@ -670,7 +675,7 @@ interface MenuOption { id: string; name: string; duration_minutes: number; price
 
 const STATUS_LABELS: Record<string, string> = {
   confirmed: '確定',
-  completed: '来店完了',
+  completed: '完了',
   cancelled: 'キャンセル',
   no_show: '無断キャンセル',
   tentative: '仮予約',
@@ -789,10 +794,6 @@ function BookingEditModal({ b, onClose, onSaved }: {
     return base;
   }, [b]);
 
-  const depositLabel =
-    b.deposit_status === 'paid' ? '前金済み' :
-    b.deposit_status === 'pending' ? '前金未払い' : null;
-
   // 保存（UPDATE app_bookings 一発）
   const doUpdate = async (payload: Record<string, unknown>): Promise<boolean> => {
     setSaving(true);
@@ -864,113 +865,88 @@ function BookingEditModal({ b, onClose, onSaved }: {
 
   // クイックアクション（ステータスのみ即時更新）
   const quickStatus = async (newStatus: 'completed' | 'no_show' | 'cancelled') => {
-    if (newStatus === 'cancelled' && !window.confirm('この予約をキャンセルしますか？')) return;
-    if (newStatus === 'no_show' && !window.confirm('この予約を無断キャンセルとして記録しますか？')) return;
+    if (newStatus === 'cancelled' && !window.confirm('この予約をキャンセルします。よろしいですか？')) return;
+    if (newStatus === 'no_show' && !window.confirm('この予約を無断キャンセルとして記録します。よろしいですか？')) return;
     const ok = await doUpdate({ status: newStatus });
     if (ok) await onSaved();
   };
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 100,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-      }}
-    >
+    <div className="modal-overlay" onClick={onClose}>
       <div
+        className="modal"
         onClick={e => e.stopPropagation()}
-        style={{
-          background: 'var(--color-bg)', borderRadius: 12, width: 'min(560px, 100%)',
-          maxHeight: '90vh', overflowY: 'auto', boxSizing: 'border-box',
-          boxShadow: '0 8px 30px rgba(0,0,0,0.25)', fontFamily: 'var(--tl-font)',
-        }}
+        style={{ width: 'min(560px, 100%)', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
       >
         {/* ヘッダ */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px',
-          borderBottom: '1px solid var(--color-border)',
-          position: 'sticky', top: 0, background: 'var(--color-bg)', zIndex: 1,
-        }}>
-          <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-primary-dark)' }}>
-            予約の詳細・編集
-          </span>
+        <div className="modal-head" style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--ink)' }}>予約の変更</span>
           {b.is_first_visit && (
-            <span style={{
-              fontSize: 10, fontWeight: 800, color: '#fff', background: 'var(--status-new)',
-              borderRadius: 3, padding: '1px 6px',
-            }}>初回</span>
+            <span className="badge" style={{ background: 'var(--accent-weak)', color: 'var(--accent)' }}>初回</span>
           )}
-          {depositLabel && (
-            <span style={{
-              fontSize: 11, fontWeight: 700,
-              color: b.deposit_status === 'paid' ? '#2E7D32' : '#C62828',
-              background: b.deposit_status === 'paid' ? '#E8F5E9' : '#FFEBEE',
-              borderRadius: 10, padding: '1px 8px',
-            }}>{depositLabel}</span>
-          )}
+          {b.deposit_status === 'paid' && <span className="badge badge-green">前金済</span>}
+          {b.deposit_status === 'pending' && <span className="badge badge-amber">前金未確認</span>}
           <button
+            type="button"
             onClick={onClose}
-            title="閉じる"
+            title="変更せずに閉じます"
+            aria-label="閉じる"
             style={{
               marginLeft: 'auto', border: 'none', background: 'transparent', cursor: 'pointer',
-              fontSize: 20, lineHeight: 1, color: 'var(--color-text-mute)', padding: 4,
+              fontSize: 20, lineHeight: 1, color: 'var(--sub)', padding: 4,
             }}
           >×</button>
         </div>
 
-        <div style={{ padding: '16px 20px' }}>
+        <div style={{ padding: 20, overflowY: 'auto' }}>
           {/* お客様情報（表示のみ） */}
-          <div style={{
-            background: 'var(--color-bg-sub)', borderRadius: 8, padding: '10px 14px',
-            marginBottom: 16, fontSize: 13, lineHeight: 1.7,
-          }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text)' }}>
+          <div className="note" style={{ marginBottom: 16, lineHeight: 1.7 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--ink)' }}>
               {b.guest_name ? (
                 <>
                   {b.guest_name}
-                  <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--color-text-sub)', marginLeft: 6 }}>様</span>
+                  <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--sub)', marginLeft: 6 }}>様</span>
                 </>
               ) : '会員（アプリ予約）'}
             </div>
-            <div style={{ color: 'var(--color-text-sub)' }}>
+            <div style={{ color: 'var(--sub)' }}>
               電話: {b.guest_phone ?? '（未登録）'}
             </div>
-            <div style={{ color: 'var(--color-text-sub)' }}>
+            <div style={{ color: 'var(--sub)' }}>
               現在: {fmtClock(b.starts_at)}{b.ends_at ? `〜${fmtClock(b.ends_at)}` : ''} / {b.menu?.name ?? 'メニュー不明'} / {STATUS_LABELS[b.status] ?? b.status}
             </div>
           </div>
 
           {/* 編集フォーム */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <div>
-              <label style={mLabel}>日付</label>
-              <input type="date" style={mInp} value={date} onChange={e => setDate(e.target.value)} />
+            <div className="field">
+              <label className="field-label">日付</label>
+              <input type="date" className="input" value={date} onChange={e => setDate(e.target.value)} />
             </div>
-            <div>
-              <label style={mLabel}>開始時刻（15分刻み）</label>
-              <select style={mInp} value={time} onChange={e => setTime(e.target.value)}>
+            <div className="field">
+              <label className="field-label">開始時刻（15分刻み）</label>
+              <select className="select" value={time} onChange={e => setTime(e.target.value)}>
                 {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
-            <div>
-              <label style={mLabel}>担当スタッフ</label>
-              <select style={mInp} value={staffId} onChange={e => setStaffId(e.target.value)}>
+            <div className="field">
+              <label className="field-label">担当スタッフ</label>
+              <select className="select" value={staffId} onChange={e => setStaffId(e.target.value)}>
                 <option value="">未割当（指名なし）</option>
                 {staffList.map(s => <option key={s.staff_id} value={s.staff_id}>{s.full_name}</option>)}
               </select>
             </div>
-            <div>
-              <label style={mLabel}>ステータス</label>
-              <select style={mInp} value={status} onChange={e => setStatus(e.target.value)}>
+            <div className="field">
+              <label className="field-label">ステータス</label>
+              <select className="select" value={status} onChange={e => setStatus(e.target.value)}>
                 {statusOptions.map(s => (
                   <option key={s} value={s}>{STATUS_LABELS[s] ?? s}</option>
                 ))}
               </select>
             </div>
-            <div style={{ gridColumn: '1 / -1' }}>
-              <label style={mLabel}>メニュー</label>
-              <select style={mInp} value={menuId} onChange={e => setMenuId(e.target.value)}>
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label className="field-label">メニュー</label>
+              <select className="select" value={menuId} onChange={e => setMenuId(e.target.value)}>
                 <option value="">選択してください</option>
                 {menuList.map(m => (
                   <option key={m.id} value={m.id}>
@@ -979,10 +955,11 @@ function BookingEditModal({ b, onClose, onSaved }: {
                 ))}
               </select>
             </div>
-            <div style={{ gridColumn: '1 / -1' }}>
-              <label style={mLabel}>要望・スタッフメモ</label>
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label className="field-label">要望・スタッフメモ</label>
               <textarea
-                style={{ ...mInp, height: 70, resize: 'vertical' }}
+                className="textarea"
+                style={{ height: 70, resize: 'vertical' }}
                 placeholder="お客様からの要望やスタッフメモ"
                 value={customerRequest}
                 onChange={e => setCustomerRequest(e.target.value)}
@@ -991,91 +968,72 @@ function BookingEditModal({ b, onClose, onSaved }: {
           </div>
 
           {endPreview && (
-            <div style={{
-              marginTop: 12, padding: '8px 14px', background: 'var(--color-bg-sub)',
-              borderRadius: 8, fontSize: 13, color: 'var(--color-text-sub)',
-            }}>
+            <div className="note" style={{ marginTop: 12 }}>
               終了予定: <strong>{endPreview}</strong>（{durationMin}分）
             </div>
           )}
 
           {error && (
             <div style={{
-              marginTop: 12, padding: '10px 14px', background: '#FFEBEE',
-              border: '1px solid #EF9A9A', borderRadius: 8, color: '#C62828', fontSize: 13,
+              marginTop: 12, padding: '10px 14px', background: 'var(--red-weak)',
+              borderRadius: 8, color: 'var(--red)', fontSize: 13,
             }}>
-              ⚠️ {error}
+              {error}
             </div>
           )}
 
-          {/* クイックアクション */}
+          {/* クイックアクション（ステータスのみ即時更新） */}
           <div style={{
             display: 'flex', gap: 8, marginTop: 16, paddingTop: 14,
-            borderTop: '1px solid var(--color-border)', flexWrap: 'wrap',
+            borderTop: '1px solid var(--line)', flexWrap: 'wrap',
           }}>
             <button
+              type="button"
+              className="btn btn-sm"
               onClick={() => quickStatus('completed')}
               disabled={saving}
-              style={{ ...quickBtn, border: '1px solid #2E7D32', color: '#2E7D32' }}
-            >来店完了</button>
+              title="この予約を来店完了として記録します"
+            >来店完了にする</button>
             <button
+              type="button"
+              className="btn btn-sm"
               onClick={() => quickStatus('no_show')}
               disabled={saving}
-              style={{ ...quickBtn, border: '1px solid #C62828', color: '#C62828' }}
-            >無断キャンセル</button>
+              title="この予約を無断キャンセルとして記録します"
+            >無断キャンセルにする</button>
             <button
+              type="button"
+              className="btn btn-sm btn-danger"
               onClick={() => quickStatus('cancelled')}
               disabled={saving}
-              style={{ ...quickBtn, border: '1px solid var(--color-text-mute)', color: 'var(--color-text-sub)' }}
-            >キャンセル</button>
+              title="この予約をキャンセルして枠を空けます"
+            >予約をキャンセルする</button>
           </div>
+        </div>
 
-          {/* フッタ */}
-          <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-            <button
-              onClick={onClose}
-              disabled={saving}
-              style={{
-                flex: 1, padding: 12, background: 'var(--color-bg-sub)', color: 'var(--color-text-sub)',
-                border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: 'pointer',
-              }}
-            >閉じる</button>
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              style={{
-                flex: 2, padding: 12, background: 'var(--color-primary-dark)', color: '#fff',
-                border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700,
-                cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1,
-                letterSpacing: 0.5,
-              }}
-            >{saving ? '保存中…' : '変更を保存する'}</button>
-          </div>
+        {/* フッタ */}
+        <div className="modal-foot" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexShrink: 0 }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onClose}
+            disabled={saving}
+          >閉じる</button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleSave}
+            disabled={saving}
+          >{saving ? '保存中…' : '変更を保存する'}</button>
         </div>
       </div>
     </div>
   );
 }
 
-const mLabel: React.CSSProperties = {
-  display: 'block', marginBottom: 5, fontSize: 12, fontWeight: 600, color: 'var(--color-text-sub)',
-};
-const mInp: React.CSSProperties = {
-  width: '100%', padding: '9px 11px', border: '1px solid var(--color-border)',
-  borderRadius: 8, fontSize: 14, background: 'var(--color-bg-muted)', boxSizing: 'border-box',
-  outline: 'none', fontFamily: 'inherit', color: 'var(--color-text)',
-};
-const quickBtn: React.CSSProperties = {
-  padding: '7px 14px', fontSize: 13, fontWeight: 600, background: '#fff',
-  borderRadius: 8, cursor: 'pointer',
-};
-
 // ─────────────────────────────────────────────────────────────
-// AirReserve取込ブロック（読み取り専用・くすみ紫）
+// AirReserve取込ブロック（読み取り専用・purple-weak地）
 // ─────────────────────────────────────────────────────────────
-const AIR_ACCENT = '#8E7CC3';
-const AIR_BG = '#F3F0F9';
-
 function AirReserveBlock({ ev, openMin, closeMin }: { ev: AirReserveRow; openMin: number; closeMin: number }) {
   const startMin = dateToMinOfDay(ev.starts_at);
   const endMin = dateToMinOfDay(ev.ends_at);
@@ -1089,29 +1047,37 @@ function AirReserveBlock({ ev, openMin, closeMin }: { ev: AirReserveRow; openMin
 
   return (
     <div
-      title={`${fmtClock(ev.starts_at)}〜${fmtClock(ev.ends_at)} AirReserve取込 / ${ev.summary ?? ''}`}
+      title={`${fmtClock(ev.starts_at)}〜${fmtClock(ev.ends_at)} AirReserveの予約（参照のみ・編集不可）${ev.summary ? ` / ${ev.summary}` : ''}`}
       style={{
         position: 'absolute', top, left: 2, right: 2, height: height - 2,
-        background: AIR_BG, borderLeft: `3px solid ${AIR_ACCENT}`,
+        background: 'var(--purple-weak)',
+        border: '1px solid var(--line)',
+        borderLeft: '3px solid var(--purple)',
         borderRadius: 4, boxSizing: 'border-box',
-        padding: '2px 5px', overflow: 'hidden', zIndex: 1,
-        boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
-        cursor: 'default', lineHeight: 1.3,
+        padding: '2px 6px', overflow: 'hidden', zIndex: 1,
+        boxShadow: 'var(--shadow)',
+        cursor: 'default', lineHeight: 1.35,
       }}
     >
       <div style={{
         display: 'flex', alignItems: 'center', gap: 4,
-        fontSize: 11, fontWeight: 700, color: AIR_ACCENT,
+        fontSize: 11, fontWeight: 600, color: 'var(--purple)',
+        fontVariantNumeric: 'tabular-nums',
       }}>
         <span>{fmtClock(ev.starts_at)}</span>
-        <span style={{
-          fontSize: 9, fontWeight: 800, color: '#fff', background: AIR_ACCENT,
-          borderRadius: 3, padding: '0 3px', lineHeight: '13px',
-        }}>AirReserve</span>
+        {!compact && <span className="badge badge-purple">AirReserve</span>}
+        {compact && (
+          <span style={{
+            fontSize: 11, fontWeight: 600, color: 'var(--ink)',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {ev.summary ?? 'AirReserve'}
+          </span>
+        )}
       </div>
       {!compact && (
         <div style={{
-          fontSize: 12, fontWeight: 700, color: 'var(--color-text)',
+          fontSize: 12, color: 'var(--sub)',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>
           {ev.summary ?? '（内容未記入）'}
@@ -1137,20 +1103,20 @@ function UnavailBlock({ u, openMin, closeMin }: { u: UnavailRow; openMin: number
     busy: '対応中',
     off: '不在',
   };
-  const label = (u.block_type && labelMap[u.block_type]) || u.reason || '非稼働';
+  const label = (u.block_type && labelMap[u.block_type]) || u.reason || '休み';
 
   return (
     <div
-      title={`${fmtClock(u.starts_at)}〜${fmtClock(u.ends_at)} ${label}`}
+      title={`${fmtClock(u.starts_at)}〜${fmtClock(u.ends_at)} ${label}（この時間帯は予約できません）`}
       style={{
         position: 'absolute', top, left: 2, right: 2, height: height - 2,
         boxSizing: 'border-box', borderRadius: 4, zIndex: 1, overflow: 'hidden',
-        border: '1px solid var(--color-border-strong)',
-        backgroundColor: 'var(--color-bg-sub)',
+        border: '1px solid var(--line)',
+        backgroundColor: 'var(--bg)',
         backgroundImage:
-          'repeating-linear-gradient(45deg, rgba(0,0,0,0.06) 0, rgba(0,0,0,0.06) 4px, transparent 4px, transparent 8px)',
+          'repeating-linear-gradient(45deg, rgba(0,0,0,0.05) 0, rgba(0,0,0,0.05) 4px, transparent 4px, transparent 8px)',
         display: 'flex', alignItems: 'flex-start',
-        padding: '2px 5px', fontSize: 10, color: 'var(--color-text-mute)', fontWeight: 600,
+        padding: '2px 6px', fontSize: 10, color: 'var(--sub)', fontWeight: 600,
       }}
     >
       {label}
@@ -1159,57 +1125,51 @@ function UnavailBlock({ u, openMin, closeMin }: { u: UnavailRow; openMin: number
 }
 
 // ─────────────────────────────────────────────────────────────
-// 凡例
+// 凡例（ラベル付き・ステータス表記統一）
 // ─────────────────────────────────────────────────────────────
 function Legend() {
-  const items: { label: string; accent: string; bg: string; hatch?: boolean; badge?: boolean }[] = [
-    { label: '初回', accent: 'var(--status-new)', bg: 'var(--status-new-bg)', badge: true },
-    { label: '再来店', accent: 'var(--status-repeat)', bg: 'var(--status-repeat-bg)' },
-    { label: '仮予約', accent: 'var(--status-tentative)', bg: '#FFF6E8' },
-    { label: '来店済', accent: 'var(--status-done)', bg: 'var(--color-bg-sub)' },
-    { label: '非稼働', accent: 'var(--color-border-strong)', bg: 'var(--color-bg-sub)', hatch: true },
-    { label: 'AirReserve取込', accent: AIR_ACCENT, bg: AIR_BG },
+  const items: { label: string; color: string; bg?: string; hatch?: boolean; title: string }[] = [
+    { label: '確定', color: 'var(--green)', title: '来店予定が確定している予約です' },
+    { label: '完了', color: 'var(--sub)', title: '来店が完了した予約です' },
+    { label: '無断キャンセル', color: 'var(--red)', title: '連絡なく来店されなかった予約です' },
+    { label: '前金未確認', color: 'var(--amber)', title: '初回前金の入金確認が済んでいない予約です' },
+    { label: 'AirReserve', color: 'var(--purple)', bg: 'var(--purple-weak)', title: 'AirReserveから取り込んだ予約です（参照のみ・編集不可）' },
+    { label: '休み', color: 'var(--line)', hatch: true, title: 'スタッフが対応できない時間帯です' },
   ];
   return (
-    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14, alignItems: 'center' }}>
+    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+      <span style={{ fontSize: 12, color: 'var(--sub)' }}>凡例:</span>
       {items.map(it => (
-        <div key={it.label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--color-text-sub)' }}>
+        <span
+          key={it.label}
+          title={it.title}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--sub)' }}
+        >
           <span style={{
-            width: 16, height: 16, borderRadius: 3, borderLeft: `3px solid ${it.accent}`,
-            background: it.bg, boxSizing: 'border-box',
+            width: 14, height: 14, borderRadius: 3, boxSizing: 'border-box',
+            background: it.bg ?? 'var(--surface)',
+            border: '1px solid var(--line)',
+            borderLeft: `3px solid ${it.color}`,
             backgroundImage: it.hatch
-              ? 'repeating-linear-gradient(45deg, rgba(0,0,0,0.06) 0, rgba(0,0,0,0.06) 3px, transparent 3px, transparent 6px)'
+              ? 'repeating-linear-gradient(45deg, rgba(0,0,0,0.05) 0, rgba(0,0,0,0.05) 3px, transparent 3px, transparent 6px)'
               : undefined,
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            {it.badge && (
-              <span style={{ fontSize: 8, fontWeight: 800, color: it.accent }}>初</span>
-            )}
-          </span>
+          }} />
           {it.label}
-        </div>
+        </span>
       ))}
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────
-// 日付見出し（土=青 / 日=赤）
+// 日付見出し（日曜のみ--redで注意喚起。色面は最小限）
 // ─────────────────────────────────────────────────────────────
 function DateColorSpan({ date }: { date: Date }) {
   const dow = date.getDay();
-  const color =
-    dow === 0 ? 'var(--color-sun)' :
-    dow === 6 ? 'var(--color-sat)' :
-    'var(--color-text)';
+  const color = dow === 0 ? 'var(--red)' : 'var(--ink)';
   return (
-    <span style={{ fontWeight: 700, fontSize: 16, color }}>
+    <span style={{ fontWeight: 600, fontSize: 15, color }}>
       {fmtHeading(date)}
     </span>
   );
 }
-
-const navBtn: React.CSSProperties = {
-  padding: '6px 14px', background: 'var(--color-bg-sub)', border: 'none',
-  borderRadius: 8, cursor: 'pointer', fontSize: 13, color: 'var(--color-text-sub)',
-};
