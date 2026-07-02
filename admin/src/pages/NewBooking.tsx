@@ -70,6 +70,42 @@ export function NewBooking() {
 
     setLoading(true); setError(null);
 
+    // AirReserve取込予約との重複チェック
+    // （app_bookings同士のEXCLUDE制約ではAirReserve側の重複は防げないため、保存前に確認する）
+    // 重複条件: 既存.starts_at < 新規.ends_at AND 既存.ends_at > 新規.starts_at（[starts, ends) 区間）
+    let airQ = supabase
+      .from('airreserve_events')
+      .select('id, staff_id, starts_at, ends_at')
+      .eq('store_id', form.storeId)
+      .lt('starts_at', endsAt.toISOString())
+      .gt('ends_at', startsAt.toISOString());
+    if (form.staffId) airQ = airQ.eq('staff_id', form.staffId);
+
+    const { data: airOverlaps, error: airErr } = await airQ;
+
+    if (airErr) {
+      setLoading(false);
+      setError(`エラー: AirReserve予約の重複確認に失敗しました（${airErr.message}）`);
+      return;
+    }
+    if (form.staffId && (airOverlaps?.length ?? 0) > 0) {
+      // 指名スタッフのAirReserve予約と重なる → 保存をブロック
+      setLoading(false);
+      setError('この時間帯はAirReserveの予約と重複しています。別の時間を選んでください。');
+      return;
+    }
+    if (!form.staffId && (airOverlaps?.length ?? 0) > 0) {
+      // 指名なし（未割当）の場合、この店舗の誰かのAirReserve予約と重なる → 警告して確認
+      // （このフォームでは自動割当は行われないため、ブロックせず確認のみ）
+      const proceed = window.confirm(
+        'この時間帯はこの店舗のAirReserveの予約と重複しています。\n担当スタッフが未指定のため、担当を決める際に時間が重なる可能性があります。\nこのまま登録しますか？',
+      );
+      if (!proceed) {
+        setLoading(false);
+        return;
+      }
+    }
+
     const { error: err } = await supabase.from('app_bookings').insert({
       store_id:           form.storeId,
       treatment_menu_id:  form.menuId,

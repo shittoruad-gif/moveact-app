@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase';
 // ─────────────────────────────────────────────────────────────
 // サロンボード風タイムライン予約表（admin独自実装）
 //   縦軸: 営業時間を15分=18pxの行に。横軸: スタッフ列。
-//   4クエリ並列ロード: roster / business_hours / app_bookings / staff_unavailability
+//   6クエリ並列ロード: roster / business_hours / closed_days / app_bookings / staff_unavailability / airreserve_events
 // ─────────────────────────────────────────────────────────────
 
 type StoreId = 'tamashima' | 'kanamitsu';
@@ -68,6 +68,15 @@ interface UnavailRow {
   reason: string | null;
   block_type: string | null;
 }
+// AirReserve取込予約（読み取り専用表示）
+interface AirReserveRow {
+  id: string;
+  store_id: string;
+  staff_id: string | null;
+  starts_at: string;
+  ends_at: string;
+  summary: string | null;
+}
 
 // スタッフ列（未割当を含む）
 interface Column {
@@ -119,6 +128,7 @@ export function Timeline() {
   const [closedDays, setClosedDays] = useState<ClosedDayRow[]>([]);
   const [bookings, setBookings] = useState<BookingRow[]>([]);
   const [unavail, setUnavail] = useState<UnavailRow[]>([]);
+  const [airEvents, setAirEvents] = useState<AirReserveRow[]>([]);
   const [loading, setLoading] = useState(false);
 
   // 現在時刻（分）— 60秒ごと更新
@@ -140,8 +150,10 @@ export function Timeline() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const lo = `${dayStr}T00:00:00`;
-    const hi = `${dayStr}T23:59:59`;
+    // JSTの1日窓。+09:00を付けないとUTC解釈になり、早朝(6:30〜)の予約・
+    // AirReserveイベントが前日扱いになってボードから消える。
+    const lo = `${dayStr}T00:00:00+09:00`;
+    const hi = `${dayStr}T23:59:59+09:00`;
 
     // スタッフ列クエリ（store_idでフィルタする場合のみ絞る。allは両店分）
     let rosterQ = supabase.from('public_staff_roster').select('staff_id, full_name, store_id');
@@ -178,13 +190,31 @@ export function Timeline() {
       .lte('starts_at', hi);
     if (storeFilter !== 'all') unavailQ = unavailQ.eq('store_id', storeFilter);
 
-    const [r, h, c, b, u] = await Promise.all([rosterQ, hoursQ, closedQ, bookingsQ, unavailQ]);
+    // AirReserve取込予約（読み取り専用。二重予約防止のため表示必須）
+    let airQ = supabase
+      .from('airreserve_events')
+      .select('id, store_id, staff_id, starts_at, ends_at, summary')
+      .gte('starts_at', lo)
+      .lte('starts_at', hi)
+      .order('starts_at');
+    if (storeFilter !== 'all') airQ = airQ.eq('store_id', storeFilter);
+
+    const [r, h, c, b, u, a] = await Promise.all([rosterQ, hoursQ, closedQ, bookingsQ, unavailQ, airQ]);
+
+    const airRows = ((a.data as AirReserveRow[]) ?? []).filter(ev => {
+      if (ev.staff_id === null) {
+        console.warn(`[Timeline] airreserve_events ${ev.id} は staff_id が null のため表示をスキップします (starts_at=${ev.starts_at})`);
+        return false;
+      }
+      return true;
+    });
 
     setRoster((r.data as RosterRow[]) ?? []);
     setHours((h.data as BusinessHoursRow[]) ?? []);
     setClosedDays((c.data as ClosedDayRow[]) ?? []);
     setBookings((b.data as unknown as BookingRow[]) ?? []);
     setUnavail((u.data as UnavailRow[]) ?? []);
+    setAirEvents(airRows);
     setLoading(false);
   }, [dayStr, dow, storeFilter]);
 
@@ -259,6 +289,7 @@ export function Timeline() {
             closedDays={closedDays}
             bookings={bookings}
             unavail={unavail}
+            airEvents={airEvents}
             dow={dow}
             isToday={isToday}
             nowMin={nowMin}
@@ -274,7 +305,7 @@ export function Timeline() {
 // 店舗ごとのボード
 // ─────────────────────────────────────────────────────────────
 function StoreBoard({
-  store, showStoreLabel, roster, hours, closedDays, bookings, unavail, dow, isToday, nowMin, dayStr,
+  store, showStoreLabel, roster, hours, closedDays, bookings, unavail, airEvents, dow, isToday, nowMin, dayStr,
 }: {
   store: StoreId;
   showStoreLabel: boolean;
@@ -283,6 +314,7 @@ function StoreBoard({
   closedDays: ClosedDayRow[];
   bookings: BookingRow[];
   unavail: UnavailRow[];
+  airEvents: AirReserveRow[];
   dow: number;
   isToday: boolean;
   nowMin: number;
@@ -335,9 +367,10 @@ function StoreBoard({
   });
   const columns: Column[] = [...uniqueStaff, { staffId: null, name: '未割当' }];
 
-  // この店舗の予約・非稼働
+  // この店舗の予約・非稼働・AirReserve取込
   const storeBookings = bookings.filter(b => b.store_id === store);
   const storeUnavail = unavail.filter(u => u.store_id === store);
+  const storeAir = airEvents.filter(a => a.store_id === store);
 
   // 時刻目盛り（1時間ごと）
   const hourMarks: number[] = [];
@@ -425,6 +458,10 @@ function StoreBoard({
               const colUnavail = col.staffId === null
                 ? []
                 : storeUnavail.filter(u => u.staff_id === col.staffId);
+              // staff_id が null の行は load() 側で警告済み・除外済み（未割当レーンには出さない）
+              const colAir = col.staffId === null
+                ? []
+                : storeAir.filter(a => a.staff_id === col.staffId);
 
               return (
                 <div
@@ -462,6 +499,11 @@ function StoreBoard({
                   {/* 非稼働ブロック（灰色斜線） */}
                   {colUnavail.map((u, ui) => (
                     <UnavailBlock key={`u-${ui}`} u={u} openMin={openMin} closeMin={closeMin} />
+                  ))}
+
+                  {/* AirReserve取込ブロック（読み取り専用） */}
+                  {colAir.map(a => (
+                    <AirReserveBlock key={a.id} ev={a} openMin={openMin} closeMin={closeMin} />
                   ))}
 
                   {/* 予約ブロック */}
@@ -589,6 +631,57 @@ function ReservationBlock({ b, openMin, closeMin }: { b: BookingRow; openMin: nu
 }
 
 // ─────────────────────────────────────────────────────────────
+// AirReserve取込ブロック（読み取り専用・くすみ紫）
+// ─────────────────────────────────────────────────────────────
+const AIR_ACCENT = '#8E7CC3';
+const AIR_BG = '#F3F0F9';
+
+function AirReserveBlock({ ev, openMin, closeMin }: { ev: AirReserveRow; openMin: number; closeMin: number }) {
+  const startMin = dateToMinOfDay(ev.starts_at);
+  const endMin = dateToMinOfDay(ev.ends_at);
+  // 営業時間にクランプ（描画はみ出し防止）
+  const top = (startMin - openMin) * PX_PER_MIN;
+  const rawH = (endMin - startMin) * PX_PER_MIN;
+  const maxH = (closeMin - startMin) * PX_PER_MIN;
+  const height = Math.max(ROW_PX, Math.min(rawH, maxH));
+
+  const compact = height < 36;
+
+  return (
+    <div
+      title={`${fmtClock(ev.starts_at)}〜${fmtClock(ev.ends_at)} AirReserve取込 / ${ev.summary ?? ''}`}
+      style={{
+        position: 'absolute', top, left: 2, right: 2, height: height - 2,
+        background: AIR_BG, borderLeft: `3px solid ${AIR_ACCENT}`,
+        borderRadius: 4, boxSizing: 'border-box',
+        padding: '2px 5px', overflow: 'hidden', zIndex: 1,
+        boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
+        cursor: 'default', lineHeight: 1.3,
+      }}
+    >
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 4,
+        fontSize: 11, fontWeight: 700, color: AIR_ACCENT,
+      }}>
+        <span>{fmtClock(ev.starts_at)}</span>
+        <span style={{
+          fontSize: 9, fontWeight: 800, color: '#fff', background: AIR_ACCENT,
+          borderRadius: 3, padding: '0 3px', lineHeight: '13px',
+        }}>AirReserve</span>
+      </div>
+      {!compact && (
+        <div style={{
+          fontSize: 12, fontWeight: 700, color: 'var(--color-text)',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
+          {ev.summary ?? '（内容未記入）'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // 非稼働ブロック（灰色斜線）
 // ─────────────────────────────────────────────────────────────
 function UnavailBlock({ u, openMin, closeMin }: { u: UnavailRow; openMin: number; closeMin: number }) {
@@ -635,6 +728,7 @@ function Legend() {
     { label: '仮予約', accent: 'var(--status-tentative)', bg: '#FFF6E8' },
     { label: '来店済', accent: 'var(--status-done)', bg: 'var(--color-bg-sub)' },
     { label: '非稼働', accent: 'var(--color-border-strong)', bg: 'var(--color-bg-sub)', hatch: true },
+    { label: 'AirReserve取込', accent: AIR_ACCENT, bg: AIR_BG },
   ];
   return (
     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14, alignItems: 'center' }}>

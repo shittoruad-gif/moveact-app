@@ -62,8 +62,9 @@ export function Bookings() {
         menu:treatment_menu_id(name, duration_minutes, price),
         staff:staff_id(full_name)
       `)
-      .gte('starts_at', `${dayStr}T00:00:00`)
-      .lte('starts_at', `${dayStr}T23:59:59`)
+      // +09:00必須（UTC解釈だと早朝予約が前日の一覧に紛れる）
+      .gte('starts_at', `${dayStr}T00:00:00+09:00`)
+      .lte('starts_at', `${dayStr}T23:59:59+09:00`)
       .order('starts_at');
 
     if (storeFilter !== 'all') query = query.eq('store_id', storeFilter);
