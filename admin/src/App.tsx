@@ -8,6 +8,8 @@ import { NewBooking } from './pages/NewBooking';
 import { Cancellations } from './pages/Cancellations';
 import { GroupLessons } from './pages/GroupLessons';
 import { Timeline } from './pages/Timeline';
+import { StaffOff } from './pages/StaffOff';
+import { StoreSettings } from './pages/StoreSettings';
 import type { Session } from '@supabase/supabase-js';
 
 function Layout({ children }: { children: React.ReactNode }) {
@@ -22,6 +24,8 @@ function Layout({ children }: { children: React.ReactNode }) {
     { to: '/new-booking', label: '手動予約入力', icon: '✏️' },
     { to: '/cancellations', label: '当日キャンセル', icon: '❌' },
     { to: '/lessons', label: 'グループレッスン', icon: '🧘' },
+    { to: '/staff-off', label: 'スタッフ休み', icon: '🌙' },
+    { to: '/store-settings', label: '店舗設定', icon: '⚙️' },
   ];
 
   return (
@@ -161,6 +165,8 @@ export default function App() {
           <Route path="/new-booking" element={<NewBooking />} />
           <Route path="/cancellations" element={<Cancellations />} />
           <Route path="/lessons" element={<GroupLessons />} />
+          <Route path="/staff-off" element={<StaffOff />} />
+          <Route path="/store-settings" element={<StoreSettings />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </Layout>

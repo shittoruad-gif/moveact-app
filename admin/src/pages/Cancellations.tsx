@@ -18,6 +18,13 @@ interface Booking {
   };
 }
 
+function isoDay(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export function Cancellations() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [processing, setProcessing] = useState<string | null>(null);
@@ -27,23 +34,26 @@ export function Cancellations() {
   }, []);
 
   async function fetchTodayBookings() {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const dayStr = isoDay(new Date());
 
     const { data } = await supabase
       .from('group_lesson_bookings')
       .select(`
         id, user_id, status, booked_at,
-        group_lesson:group_lessons(id, title, starts_at, price),
+        group_lesson:group_lessons!inner(id, title, starts_at, price),
         profile:profiles!user_id(full_name, phone)
       `)
       .eq('status', 'confirmed')
-      .gte('booked_at', today.toISOString())
-      .order('booked_at', { ascending: false });
+      // 「今日作成された予約」ではなく「実施日が今日」の予約を対象にする（+09:00のJST日窓必須）
+      .gte('group_lesson.starts_at', `${dayStr}T00:00:00+09:00`)
+      .lte('group_lesson.starts_at', `${dayStr}T23:59:59+09:00`);
 
-    setBookings((data as any) ?? []);
+    const rows = (((data as any) ?? []) as Booking[]).slice();
+    rows.sort((a, b) =>
+      new Date((a.group_lesson as any)?.starts_at ?? 0).getTime() -
+      new Date((b.group_lesson as any)?.starts_at ?? 0).getTime()
+    );
+    setBookings(rows);
   }
 
   async function handleCancel(bookingId: string, chargeType: 'ticket' | 'stripe' | 'waive') {
@@ -86,7 +96,7 @@ export function Cancellations() {
             <th style={thStyle}>顧客名</th>
             <th style={thStyle}>電話番号</th>
             <th style={thStyle}>レッスン</th>
-            <th style={thStyle}>開始時刻</th>
+            <th style={thStyle}>実施日時</th>
             <th style={thStyle}>料金</th>
             <th style={thStyle}>ステータス</th>
             <th style={thStyle}>キャンセル処理</th>
@@ -100,7 +110,9 @@ export function Cancellations() {
               <td style={tdStyle}>{(b.group_lesson as any)?.title ?? '-'}</td>
               <td style={tdStyle}>
                 {(b.group_lesson as any)?.starts_at
-                  ? new Date((b.group_lesson as any).starts_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+                  ? new Date((b.group_lesson as any).starts_at).toLocaleString('ja-JP', {
+                      month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit',
+                    })
                   : '-'}
               </td>
               <td style={tdStyle}>¥{((b.group_lesson as any)?.price ?? 0).toLocaleString()}</td>
@@ -147,7 +159,7 @@ export function Cancellations() {
           {bookings.length === 0 && (
             <tr>
               <td colSpan={7} style={{ ...tdStyle, textAlign: 'center', color: '#999' }}>
-                本日の予約はありません
+                本日実施の予約はありません
               </td>
             </tr>
           )}

@@ -50,6 +50,8 @@ export function Bookings() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(false);
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [updating, setUpdating] = useState<string | null>(null);
+  const [pendingOnly, setPendingOnly] = useState(false);
 
   const fetchBookings = useCallback(async () => {
     setLoading(true);
@@ -87,6 +89,18 @@ export function Bookings() {
     setCancelling(null);
   };
 
+  const handleStatusChange = async (id: string, status: 'completed' | 'no_show') => {
+    const label = status === 'completed' ? '来店完了' : '無断欠席';
+    if (!window.confirm(`この予約を「${label}」にしますか？`)) return;
+    setUpdating(id);
+    const { error } = await supabase
+      .from('app_bookings')
+      .update({ status })
+      .eq('id', id);
+    if (!error) await fetchBookings();
+    setUpdating(null);
+  };
+
   const moveDate = (days: number) => {
     const d = new Date(date);
     d.setDate(d.getDate() + days);
@@ -95,17 +109,31 @@ export function Bookings() {
 
   const isToday = isoDay(date) === isoDay(todayDate);
 
-  const active    = bookings.filter(b => b.status !== 'cancelled');
+  // 前金未確認のみフィルタ（当日の入金照合漏れ防止）
+  const visible = pendingOnly ? bookings.filter(b => b.deposit_status === 'pending') : bookings;
+  const active    = visible.filter(b => b.status !== 'cancelled');
   const firstVisit = active.filter(b => b.is_first_visit);
   const returning  = active.filter(b => !b.is_first_visit);
-  const cancelled  = bookings.filter(b => b.status === 'cancelled');
+  const cancelled  = visible.filter(b => b.status === 'cancelled');
+  const pendingCount = bookings.filter(b => b.deposit_status === 'pending' && b.status !== 'cancelled').length;
 
   return (
     <div>
       {/* タイトル行 */}
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 20, gap: 12 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: '#C3003A' }}>予約管理</h2>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button
+            onClick={() => setPendingOnly(p => !p)}
+            style={{
+              padding: '5px 14px', borderRadius: 20, cursor: 'pointer',
+              fontSize: 13, fontWeight: 700, marginRight: 8,
+              border: '1px solid #E8590C',
+              background: pendingOnly ? '#E8590C' : '#fff',
+              color: pendingOnly ? '#fff' : '#E8590C',
+              transition: 'all 0.15s',
+            }}
+          >⚠ 前金未確認のみ{pendingCount > 0 ? `（${pendingCount}）` : ''}</button>
           {(['all', 'tamashima', 'kanamitsu'] as const).map(s => (
             <button
               key={s}
@@ -152,7 +180,7 @@ export function Bookings() {
               headerBg="#FFF5F5"
             >
               {firstVisit.map(b => (
-                <BookingCard key={b.id} b={b} onCancel={handleCancel} cancelling={cancelling} />
+                <BookingCard key={b.id} b={b} onCancel={handleCancel} onStatusChange={handleStatusChange} cancelling={cancelling} updating={updating} />
               ))}
             </SectionBlock>
           )}
@@ -165,7 +193,7 @@ export function Bookings() {
               headerBg="#FCEFF3"
             >
               {returning.map(b => (
-                <BookingCard key={b.id} b={b} onCancel={handleCancel} cancelling={cancelling} />
+                <BookingCard key={b.id} b={b} onCancel={handleCancel} onStatusChange={handleStatusChange} cancelling={cancelling} updating={updating} />
               ))}
             </SectionBlock>
           )}
@@ -174,14 +202,14 @@ export function Bookings() {
           {cancelled.length > 0 && (
             <SectionBlock title={`キャンセル済み（${cancelled.length}件）`} borderColor="#bbb" headerBg="#f8f8f8">
               {cancelled.map(b => (
-                <BookingCard key={b.id} b={b} onCancel={() => {}} cancelling={null} showCancel={false} />
+                <BookingCard key={b.id} b={b} onCancel={() => {}} onStatusChange={() => {}} cancelling={null} updating={null} showCancel={false} />
               ))}
             </SectionBlock>
           )}
 
-          {bookings.length === 0 && (
+          {visible.length === 0 && (
             <div style={{ textAlign: 'center', padding: 80, color: '#bbb', fontSize: 15 }}>
-              この日の予約はありません
+              {pendingOnly ? '前金未確認の予約はありません' : 'この日の予約はありません'}
             </div>
           )}
         </>
@@ -207,11 +235,17 @@ function SectionBlock({ title, borderColor, headerBg, children }: {
   );
 }
 
-function BookingCard({ b, onCancel, cancelling, showCancel = true }: {
-  b: Booking; onCancel: (id: string) => void; cancelling: string | null; showCancel?: boolean;
+function BookingCard({ b, onCancel, onStatusChange, cancelling, updating, showCancel = true }: {
+  b: Booking;
+  onCancel: (id: string) => void;
+  onStatusChange: (id: string, status: 'completed' | 'no_show') => void;
+  cancelling: string | null;
+  updating: string | null;
+  showCancel?: boolean;
 }) {
   const st = STATUS_MAP[b.status] ?? { label: b.status, color: '#555', bg: '#eee' };
   const isCancelled = b.status === 'cancelled';
+  const busy = cancelling === b.id || updating === b.id;
 
   return (
     <div style={{
@@ -268,22 +302,47 @@ function BookingCard({ b, onCancel, cancelling, showCancel = true }: {
           background: st.bg, padding: '2px 10px', borderRadius: 20,
         }}>{st.label}</span>
         {b.deposit_status === 'pending' && (
-          <span style={{ fontSize: 11, color: '#E84C4C', fontWeight: 600 }}>前金未払い</span>
+          <span style={{
+            fontSize: 12, fontWeight: 700, color: '#fff', background: '#E8590C',
+            padding: '3px 10px', borderRadius: 6, letterSpacing: 0.5,
+          }}>⚠ 前金未確認</span>
         )}
-        {b.deposit_status === 'paid' && (
-          <span style={{ fontSize: 11, color: '#388E3C', fontWeight: 600 }}>前金済み</span>
+        {(b.deposit_status === 'paid' || b.deposit_status === 'waived') && (
+          <span style={{ fontSize: 11, color: '#388E3C', fontWeight: 600 }}>前金済</span>
         )}
         {showCancel && b.status === 'confirmed' && (
-          <button
-            onClick={() => onCancel(b.id)}
-            disabled={cancelling === b.id}
-            style={{
-              padding: '4px 12px', fontSize: 12, fontWeight: 600,
-              border: '1px solid #E84C4C', color: '#E84C4C',
-              background: '#fff', borderRadius: 6, cursor: 'pointer',
-              opacity: cancelling === b.id ? 0.5 : 1,
-            }}
-          >{cancelling === b.id ? '処理中…' : 'キャンセル'}</button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              onClick={() => onStatusChange(b.id, 'completed')}
+              disabled={busy}
+              style={{
+                padding: '4px 12px', fontSize: 12, fontWeight: 600,
+                border: 'none', color: '#fff', background: '#1B7A3C',
+                borderRadius: 6, cursor: 'pointer',
+                opacity: busy ? 0.5 : 1,
+              }}
+            >{updating === b.id ? '処理中…' : '来店完了'}</button>
+            <button
+              onClick={() => onStatusChange(b.id, 'no_show')}
+              disabled={busy}
+              style={{
+                padding: '4px 12px', fontSize: 12, fontWeight: 600,
+                border: '1px solid #C62828', color: '#C62828',
+                background: '#fff', borderRadius: 6, cursor: 'pointer',
+                opacity: busy ? 0.5 : 1,
+              }}
+            >無断</button>
+            <button
+              onClick={() => onCancel(b.id)}
+              disabled={busy}
+              style={{
+                padding: '4px 12px', fontSize: 12, fontWeight: 600,
+                border: '1px solid #E84C4C', color: '#E84C4C',
+                background: '#fff', borderRadius: 6, cursor: 'pointer',
+                opacity: busy ? 0.5 : 1,
+              }}
+            >{cancelling === b.id ? '処理中…' : 'キャンセル'}</button>
+          </div>
         )}
       </div>
     </div>

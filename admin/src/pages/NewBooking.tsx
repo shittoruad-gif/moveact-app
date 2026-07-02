@@ -1,17 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 
 type StoreId = 'tamashima' | 'kanamitsu';
 
-interface Staff { id: string; full_name: string; }
-interface Menu  { id: string; name: string; duration_minutes: number; price: number; }
+interface RosterRow { staff_id: string; full_name: string; store_id: string; }
+interface Menu      { id: string; name: string; duration_minutes: number; price: number; }
+interface MenuStore { store_id: string; treatment_menu_id: string; }
 
+// JST基準の今日（YYYY-MM-DD）。実行環境のタイムゾーンに依存しない
 function isoToday() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  const jst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  return jst.toISOString().slice(0, 10);
 }
 
 const INIT_FORM = {
@@ -27,24 +27,78 @@ const INIT_FORM = {
   isFirstVisit: false,
 };
 
+// タイムラインの空き枠クリックから渡されるURLパラメータを初期値に反映
+// 形式: /new-booking?store=tamashima&staff=<uuid|空>&date=YYYY-MM-DD&time=HH:MM
+function formFromParams(params: URLSearchParams): typeof INIT_FORM {
+  const form = { ...INIT_FORM, date: isoToday() };
+  const store = params.get('store');
+  if (store === 'tamashima' || store === 'kanamitsu') form.storeId = store;
+  const staff = params.get('staff');
+  if (staff) form.staffId = staff;
+  const date = params.get('date');
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) form.date = date;
+  const time = params.get('time');
+  if (time && /^([01]\d|2[0-3]):[0-5]\d$/.test(time)) form.time = time;
+  return form;
+}
+
 export function NewBooking() {
-  const [staffList, setStaffList] = useState<Staff[]>([]);
+  const [searchParams]            = useSearchParams();
+  const [roster, setRoster]       = useState<RosterRow[]>([]);
   const [menuList, setMenuList]   = useState<Menu[]>([]);
-  const [form, setForm]           = useState(INIT_FORM);
+  const [menuStores, setMenuStores] = useState<MenuStore[]>([]);
+  const [masterLoaded, setMasterLoaded] = useState(false);
+  const [form, setForm]           = useState(() => formFromParams(searchParams));
   const [loading, setLoading]     = useState(false);
   const [success, setSuccess]     = useState(false);
   const [error, setError]         = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
-      supabase.from('profiles').select('id, full_name').eq('role', 'staff').order('full_name'),
+      // staff_stores(is_active=true) × profiles のビュー。タイムラインの列と同じ母集団
+      supabase.from('public_staff_roster').select('staff_id, full_name, store_id').order('full_name'),
       supabase.from('treatment_menus').select('id, name, duration_minutes, price')
         .eq('is_active', true).order('sort_order'),
-    ]).then(([s, m]) => {
-      if (s.data) setStaffList(s.data as Staff[]);
-      if (m.data) setMenuList(m.data as Menu[]);
+      supabase.from('store_treatment_menus').select('store_id, treatment_menu_id')
+        .eq('is_available', true),
+    ]).then(([r, m, sm]) => {
+      if (r.data)  setRoster(r.data as RosterRow[]);
+      if (m.data)  setMenuList(m.data as Menu[]);
+      if (sm.data) setMenuStores(sm.data as MenuStore[]);
+      setMasterLoaded(true);
     });
   }, []);
+
+  // 選択店舗で稼働するスタッフ（重複staff_idは除去）
+  const staffList = useMemo(() => {
+    const seen = new Set<string>();
+    return roster
+      .filter(r => r.store_id === form.storeId)
+      .filter(r => (seen.has(r.staff_id) ? false : (seen.add(r.staff_id), true)))
+      .map(r => ({ id: r.staff_id, full_name: r.full_name }));
+  }, [roster, form.storeId]);
+
+  // 選択店舗で提供中のメニュー
+  const storeMenus = useMemo(() => {
+    const ids = new Set(
+      menuStores.filter(x => x.store_id === form.storeId).map(x => x.treatment_menu_id),
+    );
+    return menuList.filter(m => ids.has(m.id));
+  }, [menuList, menuStores, form.storeId]);
+
+  // 店舗変更時: 選択中のスタッフ/メニューが変更後の店舗で対象外なら選択解除
+  // （マスタ読み込み完了前は判定しない＝URLプレフィルを消さない）
+  useEffect(() => {
+    if (!masterLoaded) return;
+    setForm(f => {
+      const staffOk = !f.staffId ||
+        roster.some(r => r.store_id === f.storeId && r.staff_id === f.staffId);
+      const menuOk = !f.menuId ||
+        menuStores.some(x => x.store_id === f.storeId && x.treatment_menu_id === f.menuId);
+      if (staffOk && menuOk) return f;
+      return { ...f, staffId: staffOk ? f.staffId : '', menuId: menuOk ? f.menuId : '' };
+    });
+  }, [masterLoaded, form.storeId, roster, menuStores]);
 
   const set = <K extends keyof typeof INIT_FORM>(key: K, val: (typeof INIT_FORM)[K]) =>
     setForm(f => ({ ...f, [key]: val }));
@@ -53,9 +107,11 @@ export function NewBooking() {
 
   const endTime = (() => {
     if (!selectedMenu || !form.date || !form.time) return null;
-    const s = new Date(`${form.date}T${form.time}:00`);
+    const s = new Date(`${form.date}T${form.time}:00+09:00`);
     s.setMinutes(s.getMinutes() + selectedMenu.duration_minutes);
-    return s.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    return s.toLocaleTimeString('ja-JP', {
+      hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo',
+    });
   })();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -64,7 +120,7 @@ export function NewBooking() {
     if (!form.guestPhone.trim()) { setError('電話番号を入力してください'); return; }
     if (!form.menuId) { setError('メニューを選択してください'); return; }
 
-    const startsAt = new Date(`${form.date}T${form.time}:00`);
+    const startsAt = new Date(`${form.date}T${form.time}:00+09:00`); // JST明示
     const duration = selectedMenu?.duration_minutes ?? 60;
     const endsAt   = new Date(startsAt.getTime() + duration * 60 * 1000);
 
@@ -193,7 +249,7 @@ export function NewBooking() {
               <Field label="メニュー *">
                 <select style={sel} value={form.menuId} onChange={e => set('menuId', e.target.value)}>
                   <option value="">選択してください</option>
-                  {menuList.map(m => (
+                  {storeMenus.map(m => (
                     <option key={m.id} value={m.id}>
                       {m.name}（{m.duration_minutes}分 / ¥{m.price.toLocaleString()}）
                     </option>

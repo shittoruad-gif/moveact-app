@@ -47,6 +47,7 @@ interface BookingRow {
   id: string;
   store_id: string;
   staff_id: string | null;
+  treatment_menu_id: string | null;
   starts_at: string;
   ends_at: string | null;
   status: string;
@@ -114,6 +115,15 @@ function minToHHMM(min: number): string {
   const m = min % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
+// ISO → JST明示の 'YYYY-MM-DD' と 'HH:MM'（端末TZに依存させない）
+function isoToJstParts(iso: string): { date: string; time: string } {
+  const d = new Date(iso);
+  const date = d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' }); // YYYY-MM-DD
+  const time = d.toLocaleTimeString('ja-JP', {
+    timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+  return { date, time };
+}
 
 // ─────────────────────────────────────────────────────────────
 // メイン
@@ -130,6 +140,8 @@ export function Timeline() {
   const [unavail, setUnavail] = useState<UnavailRow[]>([]);
   const [airEvents, setAirEvents] = useState<AirReserveRow[]>([]);
   const [loading, setLoading] = useState(false);
+  // 予約ブロッククリックで開く詳細・編集モーダル（AirReserveブロックは対象外）
+  const [editing, setEditing] = useState<BookingRow | null>(null);
 
   // 現在時刻（分）— 60秒ごと更新
   const [nowMin, setNowMin] = useState<number>(() => {
@@ -173,7 +185,7 @@ export function Timeline() {
     let bookingsQ = supabase
       .from('app_bookings')
       .select(`
-        id, store_id, staff_id, starts_at, ends_at, status, source,
+        id, store_id, staff_id, treatment_menu_id, starts_at, ends_at, status, source,
         guest_name, guest_phone, is_first_visit, deposit_status, customer_request,
         menu:treatment_menu_id(name, duration_minutes, price),
         staff:staff_id(full_name)
@@ -294,8 +306,21 @@ export function Timeline() {
             isToday={isToday}
             nowMin={nowMin}
             dayStr={dayStr}
+            onBookingClick={setEditing}
           />
         ))
+      )}
+
+      {/* 予約詳細・編集モーダル */}
+      {editing && (
+        <BookingEditModal
+          b={editing}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null);
+            await load();
+          }}
+        />
       )}
     </div>
   );
@@ -305,7 +330,7 @@ export function Timeline() {
 // 店舗ごとのボード
 // ─────────────────────────────────────────────────────────────
 function StoreBoard({
-  store, showStoreLabel, roster, hours, closedDays, bookings, unavail, airEvents, dow, isToday, nowMin, dayStr,
+  store, showStoreLabel, roster, hours, closedDays, bookings, unavail, airEvents, dow, isToday, nowMin, dayStr, onBookingClick,
 }: {
   store: StoreId;
   showStoreLabel: boolean;
@@ -319,6 +344,7 @@ function StoreBoard({
   isToday: boolean;
   nowMin: number;
   dayStr: string;
+  onBookingClick: (b: BookingRow) => void;
 }) {
   const navigate = useNavigate();
 
@@ -506,9 +532,9 @@ function StoreBoard({
                     <AirReserveBlock key={a.id} ev={a} openMin={openMin} closeMin={closeMin} />
                   ))}
 
-                  {/* 予約ブロック */}
+                  {/* 予約ブロック（クリックで詳細・編集） */}
                   {colBookings.map(b => (
-                    <ReservationBlock key={b.id} b={b} openMin={openMin} closeMin={closeMin} />
+                    <ReservationBlock key={b.id} b={b} openMin={openMin} closeMin={closeMin} onClick={() => onBookingClick(b)} />
                   ))}
                 </div>
               );
@@ -546,7 +572,7 @@ function StoreBoard({
 // ─────────────────────────────────────────────────────────────
 // 予約ブロック
 // ─────────────────────────────────────────────────────────────
-function ReservationBlock({ b, openMin, closeMin }: { b: BookingRow; openMin: number; closeMin: number }) {
+function ReservationBlock({ b, openMin, closeMin, onClick }: { b: BookingRow; openMin: number; closeMin: number; onClick: () => void }) {
   const startMin = dateToMinOfDay(b.starts_at);
   let endMin: number;
   if (b.ends_at) {
@@ -585,7 +611,8 @@ function ReservationBlock({ b, openMin, closeMin }: { b: BookingRow; openMin: nu
 
   return (
     <div
-      title={`${fmtClock(b.starts_at)} ${b.guest_name ?? ''} / ${b.menu?.name ?? ''}`}
+      title={`${fmtClock(b.starts_at)} ${b.guest_name ?? ''} / ${b.menu?.name ?? ''}（クリックで詳細・編集）`}
+      onClick={e => { e.stopPropagation(); onClick(); }}
       style={{
         position: 'absolute', top, left: 2, right: 2, height: height - 2,
         background: bg, borderLeft: `3px solid ${accent}`,
@@ -593,8 +620,10 @@ function ReservationBlock({ b, openMin, closeMin }: { b: BookingRow; openMin: nu
         padding: '2px 5px', overflow: 'hidden', zIndex: 1,
         boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
         opacity: isCancelled ? 0.6 : 1,
-        cursor: 'default', lineHeight: 1.3,
+        cursor: 'pointer', lineHeight: 1.3,
       }}
+      onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 2px 6px rgba(0,0,0,0.18)'; }}
+      onMouseLeave={e => { e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.08)'; }}
     >
       <div style={{
         display: 'flex', alignItems: 'center', gap: 4,
@@ -629,6 +658,417 @@ function ReservationBlock({ b, openMin, closeMin }: { b: BookingRow; openMin: nu
     </div>
   );
 }
+
+// ─────────────────────────────────────────────────────────────
+// 予約詳細・編集モーダル
+//   保存は UPDATE app_bookings 一発。二重予約は DB の EXCLUDE 制約
+//   （バッファ=入れ替え時間込み）が最終防衛。AirReserve取込予約とは
+//   制約が効かないため、保存前にアプリ側で重複確認する（NewBookingと同方式）。
+// ─────────────────────────────────────────────────────────────
+interface StaffOption { staff_id: string; full_name: string; }
+interface MenuOption { id: string; name: string; duration_minutes: number; price: number; }
+
+const STATUS_LABELS: Record<string, string> = {
+  confirmed: '確定',
+  completed: '来店完了',
+  cancelled: 'キャンセル',
+  no_show: '無断キャンセル',
+  tentative: '仮予約',
+  pending: '保留',
+};
+
+function BookingEditModal({ b, onClose, onSaved }: {
+  b: BookingRow;
+  onClose: () => void;
+  onSaved: () => Promise<void> | void;
+}) {
+  const init = useMemo(() => isoToJstParts(b.starts_at), [b]);
+  const [date, setDate] = useState(init.date);
+  const [time, setTime] = useState(init.time);
+  const [staffId, setStaffId] = useState(b.staff_id ?? '');
+  const [menuId, setMenuId] = useState(b.treatment_menu_id ?? '');
+  const [status, setStatus] = useState(b.status);
+  const [customerRequest, setCustomerRequest] = useState(b.customer_request ?? '');
+
+  const [staffList, setStaffList] = useState<StaffOption[]>([]);
+  const [menuList, setMenuList] = useState<MenuOption[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 店舗の稼働スタッフ（staff_stores × profiles）と店舗メニュー（store_treatment_menus × treatment_menus）
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const [s, stm] = await Promise.all([
+        supabase
+          .from('staff_stores')
+          .select('staff_id, profile:profiles(full_name)')
+          .eq('store_id', b.store_id)
+          .eq('is_active', true),
+        supabase
+          .from('store_treatment_menus')
+          .select('treatment_menu_id')
+          .eq('store_id', b.store_id)
+          .eq('is_available', true),
+      ]);
+
+      const staffRows: StaffOption[] =
+        ((s.data as unknown as { staff_id: string; profile: { full_name: string } | null }[]) ?? [])
+          .map(r => ({ staff_id: r.staff_id, full_name: r.profile?.full_name ?? '（名前未設定）' }))
+          .sort((x, y) => x.full_name.localeCompare(y.full_name, 'ja'));
+
+      const menuIds = ((stm.data as { treatment_menu_id: string }[]) ?? []).map(r => r.treatment_menu_id);
+      let menus: MenuOption[] = [];
+      if (menuIds.length > 0) {
+        const { data: m } = await supabase
+          .from('treatment_menus')
+          .select('id, name, duration_minutes, price')
+          .in('id', menuIds)
+          .eq('is_active', true)
+          .order('sort_order');
+        menus = ((m as MenuOption[]) ?? []);
+      }
+
+      if (!alive) return;
+      // 現在の担当・メニューが一覧に無い場合も選択肢に残す（無いと保存時に意図せず変わるため）
+      if (b.staff_id && !staffRows.some(r => r.staff_id === b.staff_id)) {
+        staffRows.push({ staff_id: b.staff_id, full_name: b.staff?.full_name ?? '（現在の担当）' });
+      }
+      if (b.treatment_menu_id && !menus.some(m => m.id === b.treatment_menu_id)) {
+        menus.push({
+          id: b.treatment_menu_id,
+          name: b.menu?.name ?? '（現在のメニュー）',
+          duration_minutes: b.menu?.duration_minutes ?? 60,
+          price: b.menu?.price ?? 0,
+        });
+      }
+      setStaffList(staffRows);
+      setMenuList(menus);
+    })();
+    return () => { alive = false; };
+  }, [b]);
+
+  // 開始時刻の選択肢（15分刻み。既存予約が刻み外の時刻でも選択肢に残す）
+  const timeOptions = useMemo(() => {
+    const opts: string[] = [];
+    for (let m = 6 * 60; m <= 23 * 60 + 45; m += 15) opts.push(minToHHMM(m));
+    if (time && !opts.includes(time)) {
+      opts.push(time);
+      opts.sort();
+    }
+    return opts;
+  }, [time]);
+
+  // 元の所要時間（分）。メニュー据え置き時はこの長さを維持して平行移動する
+  const origDurationMin = useMemo(() => {
+    if (b.ends_at) {
+      const diff = Math.round((new Date(b.ends_at).getTime() - new Date(b.starts_at).getTime()) / 60_000);
+      if (diff > 0) return diff;
+    }
+    return b.menu?.duration_minutes ?? 60;
+  }, [b]);
+
+  const selectedMenu = menuList.find(m => m.id === menuId);
+  const menuChanged = menuId !== (b.treatment_menu_id ?? '');
+  // メニュー変更時は duration_minutes から ends_at を再計算
+  const durationMin = menuChanged ? (selectedMenu?.duration_minutes ?? 60) : origDurationMin;
+
+  // 終了予定の表示（JST明示）
+  const endPreview = useMemo(() => {
+    if (!date || !time) return null;
+    const s = new Date(`${date}T${time}:00+09:00`);
+    if (Number.isNaN(s.getTime())) return null;
+    const e = new Date(s.getTime() + durationMin * 60_000);
+    return e.toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', hour12: false });
+  }, [date, time, durationMin]);
+
+  // ステータス選択肢（既存が想定外の値でも選択肢に残す）
+  const statusOptions = useMemo(() => {
+    const base = ['confirmed', 'completed', 'cancelled', 'no_show'];
+    if (!base.includes(b.status)) base.unshift(b.status);
+    return base;
+  }, [b]);
+
+  const depositLabel =
+    b.deposit_status === 'paid' ? '前金済み' :
+    b.deposit_status === 'pending' ? '前金未払い' : null;
+
+  // 保存（UPDATE app_bookings 一発）
+  const doUpdate = async (payload: Record<string, unknown>): Promise<boolean> => {
+    setSaving(true);
+    setError(null);
+    const { error: err } = await supabase.from('app_bookings').update(payload).eq('id', b.id);
+    setSaving(false);
+    if (err) {
+      if (err.code === '23P01' || err.message.toLowerCase().includes('exclusion')) {
+        setError('その時間帯は既に予約があります（入れ替え時間15分を含む）');
+      } else {
+        setError(`エラー: ${err.message}`);
+      }
+      return false;
+    }
+    return true;
+  };
+
+  const handleSave = async () => {
+    setError(null);
+    if (!menuId) { setError('メニューを選択してください'); return; }
+    if (!date || !time) { setError('日付と開始時刻を入力してください'); return; }
+
+    // JST明示で組み立て（端末TZに依存させない）
+    const startsAt = new Date(`${date}T${time}:00+09:00`);
+    if (Number.isNaN(startsAt.getTime())) { setError('日付・時刻の形式が正しくありません'); return; }
+    const endsAt = new Date(startsAt.getTime() + durationMin * 60_000);
+
+    // AirReserve取込予約との重複チェック（NewBookingと同方式・同文言）。
+    // キャンセルにする保存は枠を空けるだけなので確認不要。
+    if (status !== 'cancelled') {
+      setSaving(true);
+      let airQ = supabase
+        .from('airreserve_events')
+        .select('id, staff_id, starts_at, ends_at')
+        .eq('store_id', b.store_id)
+        .lt('starts_at', endsAt.toISOString())
+        .gt('ends_at', startsAt.toISOString());
+      if (staffId) airQ = airQ.eq('staff_id', staffId);
+
+      const { data: airOverlaps, error: airErr } = await airQ;
+      setSaving(false);
+
+      if (airErr) {
+        setError(`エラー: AirReserve予約の重複確認に失敗しました（${airErr.message}）`);
+        return;
+      }
+      if (staffId && (airOverlaps?.length ?? 0) > 0) {
+        setError('この時間帯はAirReserveの予約と重複しています。別の時間を選んでください。');
+        return;
+      }
+      if (!staffId && (airOverlaps?.length ?? 0) > 0) {
+        const proceed = window.confirm(
+          'この時間帯はこの店舗のAirReserveの予約と重複しています。\n担当スタッフが未指定のため、担当を決める際に時間が重なる可能性があります。\nこのまま保存しますか？',
+        );
+        if (!proceed) return;
+      }
+    }
+
+    const ok = await doUpdate({
+      starts_at: startsAt.toISOString(),
+      ends_at: endsAt.toISOString(),
+      staff_id: staffId || null,
+      treatment_menu_id: menuId,
+      status,
+      customer_request: customerRequest.trim() || null,
+    });
+    if (ok) await onSaved();
+  };
+
+  // クイックアクション（ステータスのみ即時更新）
+  const quickStatus = async (newStatus: 'completed' | 'no_show' | 'cancelled') => {
+    if (newStatus === 'cancelled' && !window.confirm('この予約をキャンセルしますか？')) return;
+    if (newStatus === 'no_show' && !window.confirm('この予約を無断キャンセルとして記録しますか？')) return;
+    const ok = await doUpdate({ status: newStatus });
+    if (ok) await onSaved();
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 100,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: 'var(--color-bg)', borderRadius: 12, width: 'min(560px, 100%)',
+          maxHeight: '90vh', overflowY: 'auto', boxSizing: 'border-box',
+          boxShadow: '0 8px 30px rgba(0,0,0,0.25)', fontFamily: 'var(--tl-font)',
+        }}
+      >
+        {/* ヘッダ */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px',
+          borderBottom: '1px solid var(--color-border)',
+          position: 'sticky', top: 0, background: 'var(--color-bg)', zIndex: 1,
+        }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-primary-dark)' }}>
+            予約の詳細・編集
+          </span>
+          {b.is_first_visit && (
+            <span style={{
+              fontSize: 10, fontWeight: 800, color: '#fff', background: 'var(--status-new)',
+              borderRadius: 3, padding: '1px 6px',
+            }}>初回</span>
+          )}
+          {depositLabel && (
+            <span style={{
+              fontSize: 11, fontWeight: 700,
+              color: b.deposit_status === 'paid' ? '#2E7D32' : '#C62828',
+              background: b.deposit_status === 'paid' ? '#E8F5E9' : '#FFEBEE',
+              borderRadius: 10, padding: '1px 8px',
+            }}>{depositLabel}</span>
+          )}
+          <button
+            onClick={onClose}
+            title="閉じる"
+            style={{
+              marginLeft: 'auto', border: 'none', background: 'transparent', cursor: 'pointer',
+              fontSize: 20, lineHeight: 1, color: 'var(--color-text-mute)', padding: 4,
+            }}
+          >×</button>
+        </div>
+
+        <div style={{ padding: '16px 20px' }}>
+          {/* お客様情報（表示のみ） */}
+          <div style={{
+            background: 'var(--color-bg-sub)', borderRadius: 8, padding: '10px 14px',
+            marginBottom: 16, fontSize: 13, lineHeight: 1.7,
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text)' }}>
+              {b.guest_name ? (
+                <>
+                  {b.guest_name}
+                  <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--color-text-sub)', marginLeft: 6 }}>様</span>
+                </>
+              ) : '会員（アプリ予約）'}
+            </div>
+            <div style={{ color: 'var(--color-text-sub)' }}>
+              電話: {b.guest_phone ?? '（未登録）'}
+            </div>
+            <div style={{ color: 'var(--color-text-sub)' }}>
+              現在: {fmtClock(b.starts_at)}{b.ends_at ? `〜${fmtClock(b.ends_at)}` : ''} / {b.menu?.name ?? 'メニュー不明'} / {STATUS_LABELS[b.status] ?? b.status}
+            </div>
+          </div>
+
+          {/* 編集フォーム */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label style={mLabel}>日付</label>
+              <input type="date" style={mInp} value={date} onChange={e => setDate(e.target.value)} />
+            </div>
+            <div>
+              <label style={mLabel}>開始時刻（15分刻み）</label>
+              <select style={mInp} value={time} onChange={e => setTime(e.target.value)}>
+                {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={mLabel}>担当スタッフ</label>
+              <select style={mInp} value={staffId} onChange={e => setStaffId(e.target.value)}>
+                <option value="">未割当（指名なし）</option>
+                {staffList.map(s => <option key={s.staff_id} value={s.staff_id}>{s.full_name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={mLabel}>ステータス</label>
+              <select style={mInp} value={status} onChange={e => setStatus(e.target.value)}>
+                {statusOptions.map(s => (
+                  <option key={s} value={s}>{STATUS_LABELS[s] ?? s}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label style={mLabel}>メニュー</label>
+              <select style={mInp} value={menuId} onChange={e => setMenuId(e.target.value)}>
+                <option value="">選択してください</option>
+                {menuList.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}（{m.duration_minutes}分 / ¥{m.price.toLocaleString()}）
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label style={mLabel}>要望・スタッフメモ</label>
+              <textarea
+                style={{ ...mInp, height: 70, resize: 'vertical' }}
+                placeholder="お客様からの要望やスタッフメモ"
+                value={customerRequest}
+                onChange={e => setCustomerRequest(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {endPreview && (
+            <div style={{
+              marginTop: 12, padding: '8px 14px', background: 'var(--color-bg-sub)',
+              borderRadius: 8, fontSize: 13, color: 'var(--color-text-sub)',
+            }}>
+              終了予定: <strong>{endPreview}</strong>（{durationMin}分）
+            </div>
+          )}
+
+          {error && (
+            <div style={{
+              marginTop: 12, padding: '10px 14px', background: '#FFEBEE',
+              border: '1px solid #EF9A9A', borderRadius: 8, color: '#C62828', fontSize: 13,
+            }}>
+              ⚠️ {error}
+            </div>
+          )}
+
+          {/* クイックアクション */}
+          <div style={{
+            display: 'flex', gap: 8, marginTop: 16, paddingTop: 14,
+            borderTop: '1px solid var(--color-border)', flexWrap: 'wrap',
+          }}>
+            <button
+              onClick={() => quickStatus('completed')}
+              disabled={saving}
+              style={{ ...quickBtn, border: '1px solid #2E7D32', color: '#2E7D32' }}
+            >来店完了</button>
+            <button
+              onClick={() => quickStatus('no_show')}
+              disabled={saving}
+              style={{ ...quickBtn, border: '1px solid #C62828', color: '#C62828' }}
+            >無断キャンセル</button>
+            <button
+              onClick={() => quickStatus('cancelled')}
+              disabled={saving}
+              style={{ ...quickBtn, border: '1px solid var(--color-text-mute)', color: 'var(--color-text-sub)' }}
+            >キャンセル</button>
+          </div>
+
+          {/* フッタ */}
+          <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+            <button
+              onClick={onClose}
+              disabled={saving}
+              style={{
+                flex: 1, padding: 12, background: 'var(--color-bg-sub)', color: 'var(--color-text-sub)',
+                border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+              }}
+            >閉じる</button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              style={{
+                flex: 2, padding: 12, background: 'var(--color-primary-dark)', color: '#fff',
+                border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700,
+                cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1,
+                letterSpacing: 0.5,
+              }}
+            >{saving ? '保存中…' : '変更を保存する'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const mLabel: React.CSSProperties = {
+  display: 'block', marginBottom: 5, fontSize: 12, fontWeight: 600, color: 'var(--color-text-sub)',
+};
+const mInp: React.CSSProperties = {
+  width: '100%', padding: '9px 11px', border: '1px solid var(--color-border)',
+  borderRadius: 8, fontSize: 14, background: 'var(--color-bg-muted)', boxSizing: 'border-box',
+  outline: 'none', fontFamily: 'inherit', color: 'var(--color-text)',
+};
+const quickBtn: React.CSSProperties = {
+  padding: '7px 14px', fontSize: 13, fontWeight: 600, background: '#fff',
+  borderRadius: 8, cursor: 'pointer',
+};
 
 // ─────────────────────────────────────────────────────────────
 // AirReserve取込ブロック（読み取り専用・くすみ紫）
