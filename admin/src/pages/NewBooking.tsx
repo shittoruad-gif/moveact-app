@@ -15,7 +15,8 @@ import { supabase } from '../lib/supabase';
 type StoreId = 'tamashima' | 'kanamitsu';
 
 interface RosterRow { staff_id: string; full_name: string; store_id: string; }
-interface Menu      { id: string; name: string; duration_minutes: number; price: number; }
+interface Menu      { id: string; name: string; duration_minutes: number; price: number; treatment_type: string; }
+interface SkillRow  { staff_id: string; treatment_type: string; }
 interface MenuStore { store_id: string; treatment_menu_id: string; }
 
 // 右パネル「この日の予約状況」の統合行（app_bookings＋airreserve_events）
@@ -272,6 +273,7 @@ export function NewBooking() {
   const [roster, setRoster]       = useState<RosterRow[]>([]);
   const [menuList, setMenuList]   = useState<Menu[]>([]);
   const [menuStores, setMenuStores] = useState<MenuStore[]>([]);
+  const [skillRows, setSkillRows] = useState<SkillRow[]>([]);
   const [masterLoaded, setMasterLoaded] = useState(false);
   const [form, setForm]           = useState(() => formFromParams(searchParams));
   const [loading, setLoading]     = useState(false);
@@ -305,26 +307,44 @@ export function NewBooking() {
     Promise.all([
       // staff_stores(is_active=true) × profiles のビュー。タイムラインの列と同じ母集団
       supabase.from('public_staff_roster').select('staff_id, full_name, store_id').order('full_name'),
-      supabase.from('treatment_menus').select('id, name, duration_minutes, price')
+      supabase.from('treatment_menus').select('id, name, duration_minutes, price, treatment_type')
         .eq('is_active', true).order('sort_order'),
       supabase.from('store_treatment_menus').select('store_id, treatment_menu_id')
         .eq('is_available', true),
-    ]).then(([r, m, sm]) => {
+      // スタッフ施術スキル（メニューの施術種別で担当を絞る）
+      supabase.from('staff_skills').select('staff_id, treatment_type'),
+    ]).then(([r, m, sm, sk]) => {
       if (r.data)  setRoster(r.data as RosterRow[]);
       if (m.data)  setMenuList(m.data as Menu[]);
       if (sm.data) setMenuStores(sm.data as MenuStore[]);
+      if (sk.data) setSkillRows(sk.data as SkillRow[]);
       setMasterLoaded(true);
     });
   }, []);
 
-  // 選択店舗で稼働するスタッフ（重複staff_idは除去）
+  // 選択中メニューの施術種別を担当できるスタッフ集合（メニュー未選択なら絞らない=null）
+  const skilledForMenu = useMemo(() => {
+    const mt = menuList.find(m => m.id === form.menuId)?.treatment_type ?? null;
+    if (!mt) return null;
+    return new Set(skillRows.filter(s => s.treatment_type === mt).map(s => s.staff_id));
+  }, [menuList, form.menuId, skillRows]);
+
+  // 選択店舗で稼働し、かつ選択メニューの施術を担当できるスタッフ（重複staff_idは除去）
   const staffList = useMemo(() => {
     const seen = new Set<string>();
     return roster
       .filter(r => r.store_id === form.storeId)
+      .filter(r => !skilledForMenu || skilledForMenu.has(r.staff_id))
       .filter(r => (seen.has(r.staff_id) ? false : (seen.add(r.staff_id), true)))
       .map(r => ({ id: r.staff_id, full_name: r.full_name }));
-  }, [roster, form.storeId]);
+  }, [roster, form.storeId, skilledForMenu]);
+
+  // メニュー変更で、選択中の担当がその施術を担当できなくなったら担当をクリアする
+  useEffect(() => {
+    if (form.staffId && skilledForMenu && !skilledForMenu.has(form.staffId)) {
+      setForm(f => ({ ...f, staffId: '' }));
+    }
+  }, [skilledForMenu, form.staffId]);
 
   // 選択店舗で提供中のメニュー
   const storeMenus = useMemo(() => {
@@ -455,6 +475,10 @@ export function NewBooking() {
     if (!form.guestName.trim()) { setError('お名前を入力してください'); return; }
     if (!form.guestPhone.trim()) { setError('電話番号を入力してください'); return; }
     if (!form.menuId) { setError('メニューを選択してください'); return; }
+    // 施術スキルの整合ガード（多重防御。通常はドロップダウンで弾かれる）
+    if (form.staffId && skilledForMenu && !skilledForMenu.has(form.staffId)) {
+      setError('選択した担当スタッフはこのメニューを担当できません'); return;
+    }
 
     const startsAt = new Date(`${form.date}T${form.time}:00+09:00`); // JST明示
     const duration = selectedMenu?.duration_minutes ?? 60;
@@ -1174,6 +1198,11 @@ export function NewBooking() {
                   <option value="">指名なし</option>
                   {staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
                 </select>
+                {form.menuId && (
+                  <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--sub)' }}>
+                    このメニューを担当できるスタッフのみ表示しています。
+                  </p>
+                )}
                 {recurOn && (
                   <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--sub)' }}>
                     繰り返し予約は担当スタッフ単位で空きを確認するため、担当の選択が必要です。
