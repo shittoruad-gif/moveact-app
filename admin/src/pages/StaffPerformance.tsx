@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../lib/auth';
 
 type StoreFilter = 'all' | 'tamashima' | 'kanamitsu';
 
@@ -39,6 +40,7 @@ const yen = (n: number) => `¥${Math.round(n).toLocaleString()}`;
 const pct = (num: number, den: number) => (den > 0 ? `${Math.round((num / den) * 100)}%` : '—');
 
 export function StaffPerformance() {
+  const { isAdmin } = useAuth();
   const [month, setMonth] = useState<string>(thisMonth());
   const [store, setStore] = useState<StoreFilter>('all');
   const [rows, setRows] = useState<PerfRow[]>([]);
@@ -81,8 +83,9 @@ export function StaffPerformance() {
       <div className="page-head">
         <h1 className="page-title">スタッフ成績・歩合</h1>
         <p className="page-help">
-          月ごとに、各スタッフのリピート率やキャンセル状況（がんばりや課題）と、売上に対する歩合給を集計します。
+          月ごとに、リピート率やキャンセル状況（がんばりや課題）と、売上に対する歩合給を集計します。
           売上は<strong>来店完了</strong>したメニュー料金の合計です。
+          {!isAdmin && <strong>（あなたのデータのみ表示しています）</strong>}
         </p>
       </div>
 

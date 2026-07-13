@@ -11,6 +11,8 @@ import { Timeline } from './pages/Timeline';
 import { StaffOff } from './pages/StaffOff';
 import { StoreSettings } from './pages/StoreSettings';
 import { StaffPerformance } from './pages/StaffPerformance';
+import { UpdateHistory } from './pages/UpdateHistory';
+import { AuthContext, useAuth } from './lib/auth';
 import type { Session } from '@supabase/supabase-js';
 
 // ナビ用インラインSVGアイコン（16px・ストローク・currentColor）
@@ -69,6 +71,13 @@ const ICON_PATHS = {
       <line x1="3" y1="20" x2="21" y2="20" />
     </>
   ),
+  history: (
+    <>
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 3v5h5" />
+      <path d="M12 7v5l3 2" />
+    </>
+  ),
 } as const;
 
 type IconName = keyof typeof ICON_PATHS;
@@ -92,7 +101,7 @@ function NavIcon({ name }: { name: IconName }) {
   );
 }
 
-const NAV_ITEMS: { to: string; label: string; icon: IconName; title: string }[] = [
+const NAV_ITEMS: { to: string; label: string; icon: IconName; title: string; adminOnly?: boolean }[] = [
   { to: '/timeline', label: '予約表', icon: 'timeline', title: '1日の予約をスタッフ別の時間軸で確認します' },
   { to: '/', label: 'ダッシュボード', icon: 'dashboard', title: '本日の予約件数など店舗の概況を確認します' },
   { to: '/bookings', label: '予約管理', icon: 'bookings', title: '予約を一覧で検索・確認します' },
@@ -100,8 +109,9 @@ const NAV_ITEMS: { to: string; label: string; icon: IconName; title: string }[] 
   { to: '/cancellations', label: '当日キャンセル', icon: 'cancel', title: '当日のキャンセル・無断キャンセルを記録します' },
   { to: '/lessons', label: 'グループレッスン', icon: 'group', title: 'グループレッスンの枠と参加者を管理します' },
   { to: '/staff-off', label: 'スタッフ休み', icon: 'staffOff', title: 'スタッフの休みを登録します' },
-  { to: '/store-settings', label: '店舗設定', icon: 'settings', title: '営業時間・メニュー・スタッフ情報を設定します' },
+  { to: '/store-settings', label: '店舗設定', icon: 'settings', title: '営業時間・臨時休業を設定します（管理者のみ）', adminOnly: true },
   { to: '/performance', label: 'スタッフ成績・歩合', icon: 'chart', title: 'リピート率などの成績と、売上に対する歩合給を集計します' },
+  { to: '/history', label: '更新履歴', icon: 'history', title: '予約・休みの登録/変更/削除の履歴（誰がいつ操作したか）を確認します' },
 ];
 
 // 「使い方」ヘルプモーダル
@@ -174,10 +184,14 @@ function HelpModal({ onClose }: { onClose: () => void }) {
 
 function Layout({ userEmail, children }: { userEmail: string; children: React.ReactNode }) {
   const [helpOpen, setHelpOpen] = useState(false);
+  const { isAdmin } = useAuth();
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
   };
+
+  // 管理者のみの項目（店舗設定）は一般スタッフには出さない
+  const navItems = NAV_ITEMS.filter((item) => isAdmin || !item.adminOnly);
 
   return (
     <div className="app">
@@ -187,7 +201,7 @@ function Layout({ userEmail, children }: { userEmail: string; children: React.Re
           <span>管理画面</span>
         </div>
 
-        {NAV_ITEMS.map((item) => (
+        {navItems.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
@@ -258,6 +272,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<RoleState>('checking');
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -284,10 +299,13 @@ export default function App() {
       .single()
       .then(({ data }) => {
         if (cancelled) return;
-        if (data && ['staff', 'admin'].includes((data as { role: string }).role)) {
+        const r = (data as { role: string } | null)?.role;
+        if (r === 'staff' || r === 'admin') {
           setRole('allowed');
+          setIsAdmin(r === 'admin');
         } else {
           setRole('denied');
+          setIsAdmin(false);
         }
       });
     return () => { cancelled = true; };
@@ -310,21 +328,25 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter>
-      <Layout userEmail={session.user.email ?? ''}>
-        <Routes>
-          <Route path="/timeline" element={<Timeline />} />
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/bookings" element={<Bookings />} />
-          <Route path="/new-booking" element={<NewBooking />} />
-          <Route path="/cancellations" element={<Cancellations />} />
-          <Route path="/lessons" element={<GroupLessons />} />
-          <Route path="/staff-off" element={<StaffOff />} />
-          <Route path="/store-settings" element={<StoreSettings />} />
-          <Route path="/performance" element={<StaffPerformance />} />
-          <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
-      </Layout>
-    </BrowserRouter>
+    <AuthContext.Provider value={{ userId: session.user.id, isAdmin }}>
+      <BrowserRouter>
+        <Layout userEmail={session.user.email ?? ''}>
+          <Routes>
+            <Route path="/timeline" element={<Timeline />} />
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/bookings" element={<Bookings />} />
+            <Route path="/new-booking" element={<NewBooking />} />
+            <Route path="/cancellations" element={<Cancellations />} />
+            <Route path="/lessons" element={<GroupLessons />} />
+            <Route path="/staff-off" element={<StaffOff />} />
+            {/* 店舗設定は管理者のみ。一般スタッフは / に戻す */}
+            <Route path="/store-settings" element={isAdmin ? <StoreSettings /> : <Navigate to="/" />} />
+            <Route path="/performance" element={<StaffPerformance />} />
+            <Route path="/history" element={<UpdateHistory />} />
+            <Route path="*" element={<Navigate to="/" />} />
+          </Routes>
+        </Layout>
+      </BrowserRouter>
+    </AuthContext.Provider>
   );
 }

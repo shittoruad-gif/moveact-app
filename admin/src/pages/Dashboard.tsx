@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../lib/auth';
 
 type StoreId = 'tamashima' | 'kanamitsu';
 
@@ -21,6 +22,7 @@ function isoDay(d: Date) {
 }
 
 export function Dashboard() {
+  const { userId, isAdmin } = useAuth();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
     todayByStore: { tamashima: 0, kanamitsu: 0 } as Record<StoreId, number>,
@@ -32,7 +34,8 @@ export function Dashboard() {
 
   useEffect(() => {
     fetchStats();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, userId]);
 
   async function fetchStats() {
     setLoading(true);
@@ -42,20 +45,26 @@ export function Dashboard() {
     t.setDate(t.getDate() + 1);
     const tomorrowStr = isoDay(t);
 
+    // 一般スタッフは自分の担当分のみ（管理者は店舗全体）
+    const mine = !isAdmin && !!userId;
+
     // +09:00必須（UTC解釈だと早朝予約が前日の集計に紛れる）
-    const [todayRes, tomorrowRes] = await Promise.all([
-      supabase
-        .from('app_bookings')
-        .select('store_id, status, deposit_status, menu:treatment_menu_id(price)')
-        .gte('starts_at', `${todayStr}T00:00:00+09:00`)
-        .lte('starts_at', `${todayStr}T23:59:59+09:00`),
-      supabase
-        .from('app_bookings')
-        .select('id', { count: 'exact', head: true })
-        .in('status', ['confirmed', 'completed'])
-        .gte('starts_at', `${tomorrowStr}T00:00:00+09:00`)
-        .lte('starts_at', `${tomorrowStr}T23:59:59+09:00`),
-    ]);
+    let todayQ: any = supabase
+      .from('app_bookings')
+      .select('store_id, status, deposit_status, menu:treatment_menu_id(price)')
+      .gte('starts_at', `${todayStr}T00:00:00+09:00`)
+      .lte('starts_at', `${todayStr}T23:59:59+09:00`);
+    if (mine) todayQ = todayQ.eq('staff_id', userId);
+
+    let tomorrowQ: any = supabase
+      .from('app_bookings')
+      .select('id', { count: 'exact', head: true })
+      .in('status', ['confirmed', 'completed'])
+      .gte('starts_at', `${tomorrowStr}T00:00:00+09:00`)
+      .lte('starts_at', `${tomorrowStr}T23:59:59+09:00`);
+    if (mine) tomorrowQ = tomorrowQ.eq('staff_id', userId);
+
+    const [todayRes, tomorrowRes] = await Promise.all([todayQ, tomorrowQ]);
 
     const today = ((todayRes.data as any) ?? []) as TodayBooking[];
     const activeToday = today.filter(b => b.status === 'confirmed' || b.status === 'completed');
@@ -83,7 +92,11 @@ export function Dashboard() {
     <div className="page">
       <div className="page-head">
         <h1 className="page-title">ダッシュボード</h1>
-        <p className="page-help">今日の店舗の状況をひと目で確認できます。</p>
+        <p className="page-help">
+          {isAdmin
+            ? '今日の店舗の状況をひと目で確認できます。'
+            : '今日のあなたの担当分をひと目で確認できます。（店舗全体は管理者が確認します）'}
+        </p>
       </div>
 
       {loading ? (
