@@ -10,6 +10,7 @@ import { GroupLessons } from './pages/GroupLessons';
 import { Timeline } from './pages/Timeline';
 import { StaffOff } from './pages/StaffOff';
 import { StoreSettings } from './pages/StoreSettings';
+import { StaffPerformance } from './pages/StaffPerformance';
 import type { Session } from '@supabase/supabase-js';
 
 // ナビ用インラインSVGアイコン（16px・ストローク・currentColor）
@@ -60,6 +61,14 @@ const ICON_PATHS = {
       <circle cx="12" cy="12" r="3" />
     </>
   ),
+  chart: (
+    <>
+      <line x1="6" y1="20" x2="6" y2="14" />
+      <line x1="12" y1="20" x2="12" y2="8" />
+      <line x1="18" y1="20" x2="18" y2="11" />
+      <line x1="3" y1="20" x2="21" y2="20" />
+    </>
+  ),
 } as const;
 
 type IconName = keyof typeof ICON_PATHS;
@@ -92,6 +101,7 @@ const NAV_ITEMS: { to: string; label: string; icon: IconName; title: string }[] 
   { to: '/lessons', label: 'グループレッスン', icon: 'group', title: 'グループレッスンの枠と参加者を管理します' },
   { to: '/staff-off', label: 'スタッフ休み', icon: 'staffOff', title: 'スタッフの休みを登録します' },
   { to: '/store-settings', label: '店舗設定', icon: 'settings', title: '営業時間・メニュー・スタッフ情報を設定します' },
+  { to: '/performance', label: 'スタッフ成績・歩合', icon: 'chart', title: 'リピート率などの成績と、売上に対する歩合給を集計します' },
 ];
 
 // 「使い方」ヘルプモーダル
@@ -311,6 +321,7 @@ export default function App() {
           <Route path="/lessons" element={<GroupLessons />} />
           <Route path="/staff-off" element={<StaffOff />} />
           <Route path="/store-settings" element={<StoreSettings />} />
+          <Route path="/performance" element={<StaffPerformance />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </Layout>
