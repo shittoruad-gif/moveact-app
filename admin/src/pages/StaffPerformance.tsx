@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
+import { SalesBarChart } from '../components/Charts';
 
 type StoreFilter = 'all' | 'tamashima' | 'kanamitsu';
 
@@ -23,6 +24,12 @@ interface PerfRow {
 function thisMonth(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+// YYYY-MM を n ヶ月ずらす
+function shiftMonth(ym: string, n: number): string {
+  const [y, m] = ym.split('-').map(Number);
+  const total = y * 12 + (m - 1) + n;
+  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`;
 }
 // YYYY-MM → JSTの月初/翌月初 ISO
 function monthRange(ym: string): { start: string; end: string } {
@@ -89,10 +96,16 @@ export function StaffPerformance() {
         </p>
       </div>
 
-      {/* 期間・店舗フィルタ */}
+      {/* 期間・店舗フィルタ（input type=month は非対応ブラウザがあるため ◀▶ の月送りに） */}
       <div className="toolbar" style={{ flexWrap: 'wrap', marginBottom: 16, alignItems: 'center', gap: 12 }}>
-        <label style={{ fontSize: 13, color: 'var(--sub)' }}>対象月</label>
-        <input type="month" className="select" value={month} onChange={(e) => setMonth(e.target.value)} style={{ width: 170 }} />
+        <div className="seg" role="group" aria-label="対象月" style={{ alignItems: 'center' }}>
+          <button className="seg-btn" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="前の月">‹ 前月</button>
+          <span style={{ padding: '0 12px', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap' }}>
+            {Number(month.split('-')[0])}年{Number(month.split('-')[1])}月
+          </span>
+          <button className="seg-btn" onClick={() => setMonth(shiftMonth(month, 1))} aria-label="次の月"
+            disabled={month >= thisMonth()}>翌月 ›</button>
+        </div>
         <div className="seg" role="tablist" aria-label="店舗">
           <button className={`seg-btn ${store === 'all' ? 'seg-btn--active' : ''}`} onClick={() => setStore('all')}>全店</button>
           <button className={`seg-btn ${store === 'tamashima' ? 'seg-btn--active' : ''}`} onClick={() => setStore('tamashima')}>玉島店</button>
@@ -103,9 +116,22 @@ export function StaffPerformance() {
       {loading ? (
         <div className="empty">読み込み中です…</div>
       ) : error ? (
-        <div className="empty">{error}</div>
+        <div className="empty" style={{ color: 'var(--red)' }}>{error}</div>
+      ) : rows.length === 0 ? (
+        <div className="empty">この月の集計対象データはまだありません。<br />予約表で「来店完了」を記録すると集計されます。</div>
       ) : (
         <>
+          {/* ⓪ 売上の全体像（グラフ） */}
+          <div className="card card-pad" style={{ marginBottom: 18 }}>
+            <div style={sectionTitle}>売上と歩合給の全体像</div>
+            <p style={noteStyle}>棒の長さ＝売上。濃い部分がそのうちの歩合給です（マウスを乗せると金額が出ます）。</p>
+            <SalesBarChart items={rows.map((r) => ({
+              name: r.staff_name,
+              sales: Number(r.sales || 0),
+              commission: r.commission_rate == null ? null : Number(r.commission || 0),
+            }))} />
+          </div>
+
           {/* ① 歩合給集計 */}
           <div className="card card-pad" style={{ marginBottom: 18 }}>
             <div style={sectionTitle}>歩合給の集計</div>
@@ -185,19 +211,19 @@ export function StaffPerformance() {
                         <td style={tdR}>{r.completed > 0 ? yen(Number(r.avg_price)) : '—'}</td>
                         <td style={tdR}>
                           {r.completed > 0 ? (
-                            <span className={rep >= 0.5 ? 'badge badge-green' : 'badge'}>{pct(r.repeat_visits, r.completed)}</span>
+                            <span className={`badge ${rep >= 0.5 ? 'badge-green' : 'badge-gray'}`}>{pct(r.repeat_visits, r.completed)}</span>
                           ) : '—'}
                         </td>
                         <td style={tdR}>{r.completed > 0 ? pct(r.nominated_repeat, r.completed) : '—'}</td>
                         <td style={tdR}>{r.new_customers}人</td>
                         <td style={tdR}>
                           {outcomes > 0 ? (
-                            <span className={cancelR >= 0.2 ? 'badge badge-amber' : ''}>{pct(r.cancelled, outcomes)}</span>
+                            <span className={`badge ${cancelR >= 0.2 ? 'badge-amber' : 'badge-gray'}`}>{pct(r.cancelled, outcomes)}</span>
                           ) : '—'}
                         </td>
                         <td style={tdR}>
                           {outcomes > 0 ? (
-                            <span className={noshowR > 0 ? 'badge badge-red' : ''}>{pct(r.noshow, outcomes)}</span>
+                            <span className={`badge ${noshowR > 0 ? 'badge-red' : 'badge-gray'}`}>{pct(r.noshow, outcomes)}</span>
                           ) : '—'}
                         </td>
                       </tr>

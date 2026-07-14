@@ -733,8 +733,9 @@ textarea {
     flex-direction: row;
     align-items: center;
     gap: 2px;
-    padding: 8px;
+    padding: 8px 20px 8px 8px;   /* 右に余白: 横スクロール末尾の項目が見切れて見えないのを防ぐ */
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
     border-right: none;
     border-bottom: 1px solid var(--line);
   }

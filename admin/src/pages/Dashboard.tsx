@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
+import { WeekBookingsChart, type DayCount } from '../components/Charts';
 
 type StoreId = 'tamashima' | 'kanamitsu';
 
@@ -24,6 +25,8 @@ function isoDay(d: Date) {
 export function Dashboard() {
   const { userId, isAdmin } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [week, setWeek] = useState<DayCount[]>([]);
   const [stats, setStats] = useState({
     todayByStore: { tamashima: 0, kanamitsu: 0 } as Record<StoreId, number>,
     todayCompleted: 0,
@@ -64,7 +67,43 @@ export function Dashboard() {
       .lte('starts_at', `${tomorrowStr}T23:59:59+09:00`);
     if (mine) tomorrowQ = tomorrowQ.eq('staff_id', userId);
 
-    const [todayRes, tomorrowRes] = await Promise.all([todayQ, tomorrowQ]);
+    // 今後7日間（本日含む）の予約 → 店舗別に日次集計してグラフ表示
+    const weekEnd = new Date(now);
+    weekEnd.setDate(weekEnd.getDate() + 7);
+    let weekQ: any = supabase
+      .from('app_bookings')
+      .select('starts_at, store_id')
+      .in('status', ['confirmed', 'completed'])
+      .gte('starts_at', `${todayStr}T00:00:00+09:00`)
+      .lt('starts_at', `${isoDay(weekEnd)}T00:00:00+09:00`);
+    if (mine) weekQ = weekQ.eq('staff_id', userId);
+
+    const [todayRes, tomorrowRes, weekRes] = await Promise.all([todayQ, tomorrowQ, weekQ]);
+
+    // 取得に失敗したら0件と紛らわしいので明示的にエラー表示へ
+    if (todayRes.error || tomorrowRes.error || weekRes.error) {
+      setLoadError(true);
+      setLoading(false);
+      return;
+    }
+    setLoadError(false);
+
+    // 7日分の器を作って予約をJST日付で振り分け
+    const days: DayCount[] = [];
+    const WD = ['日', '月', '火', '水', '木', '金', '土'];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() + i);
+      const iso = isoDay(d);
+      days.push({ iso, label: `${d.getMonth() + 1}/${d.getDate()}`, weekday: WD[d.getDay()], tamashima: 0, kanamitsu: 0 });
+    }
+    for (const b of ((weekRes.data as any) ?? []) as { starts_at: string; store_id: string }[]) {
+      const jst = new Date(new Date(b.starts_at).getTime() + 9 * 3600 * 1000);
+      const iso = jst.toISOString().slice(0, 10);
+      const day = days.find((x) => x.iso === iso);
+      if (day && (b.store_id === 'tamashima' || b.store_id === 'kanamitsu')) day[b.store_id]++;
+    }
+    setWeek(days);
 
     const today = ((todayRes.data as any) ?? []) as TodayBooking[];
     const activeToday = today.filter(b => b.status === 'confirmed' || b.status === 'completed');
@@ -101,6 +140,13 @@ export function Dashboard() {
 
       {loading ? (
         <div className="empty">読み込み中です…</div>
+      ) : loadError ? (
+        <div className="card card-pad" style={{ background: 'var(--red-weak)', color: 'var(--red)', fontSize: 13.5, lineHeight: 1.8 }}>
+          データの取得に失敗しました。通信環境をご確認のうえ、ページを再読み込みしてください。
+          <div style={{ marginTop: 10 }}>
+            <button className="btn btn-secondary" onClick={() => fetchStats()}>再読み込み</button>
+          </div>
+        </div>
       ) : (
         <>
           <div style={kpiGridStyle}>
@@ -144,6 +190,17 @@ export function Dashboard() {
               <div style={kpiLabelStyle}>明日の予約</div>
               <div style={kpiValueStyle}>{stats.tomorrowBookings}件</div>
             </div>
+          </div>
+
+          <div className="card card-pad" style={{ marginTop: 16 }}>
+            <div style={{ ...kpiLabelStyle, marginBottom: 10 }}>
+              今後7日間のご予約{!isAdmin && '（あなたの担当分）'}
+            </div>
+            {week.every((d) => d.tamashima + d.kanamitsu === 0) ? (
+              <div className="empty" style={{ padding: '20px 10px' }}>今後7日間のご予約はまだありません。</div>
+            ) : (
+              <WeekBookingsChart days={week} single={!isAdmin} />
+            )}
           </div>
 
           <div className="card card-pad" style={{ marginTop: 16 }}>

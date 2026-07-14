@@ -21,7 +21,8 @@ function fmtJst(iso: string): string {
   const j = new Date(new Date(iso).toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
   const p = (n: number) => String(n).padStart(2, '0');
   const w = ['日', '月', '火', '水', '木', '金', '土'][j.getDay()];
-  return `${j.getMonth() + 1}/${p(j.getDate())}(${w}) ${p(j.getHours())}:${p(j.getMinutes())}`;
+  // 月・日ともゼロ埋めなしで統一（例: 7/5(日) 14:03）
+  return `${j.getMonth() + 1}/${j.getDate()}(${w}) ${p(j.getHours())}:${p(j.getMinutes())}`;
 }
 
 export function UpdateHistory() {
@@ -81,7 +82,7 @@ export function UpdateHistory() {
       {loading ? (
         <div className="empty">読み込み中です…</div>
       ) : error ? (
-        <div className="empty">{error}</div>
+        <div className="empty" style={{ color: 'var(--red)' }}>{error}</div>
       ) : rows.length === 0 ? (
         <div className="empty">該当する履歴はまだありません。</div>
       ) : (
