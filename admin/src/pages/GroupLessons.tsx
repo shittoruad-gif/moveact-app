@@ -86,7 +86,7 @@ export function GroupLessons() {
     instructor_name: '',
     starts_at: '',
     ends_at: '',
-    max_capacity: 8,
+    max_capacity: 4,   // 定員は最大4名（2026-07-15 オーナー決定・DB側でも1〜4に制限）
     price: 3000,
   });
 
@@ -133,7 +133,7 @@ export function GroupLessons() {
       is_cancelled: false,
     });
     setShowForm(false);
-    setForm({ store_id: 'kanamitsu', title: '', instructor_name: '', starts_at: '', ends_at: '', max_capacity: 8, price: 3000 });
+    setForm({ store_id: 'kanamitsu', title: '', instructor_name: '', starts_at: '', ends_at: '', max_capacity: 4, price: 3000 });
     fetchLessons();
   }
 
@@ -264,7 +264,7 @@ export function GroupLessons() {
           description: p.description,
           starts_at: startsAt,
           ends_at: `${dateStr}T${p.endHM}:00+09:00`,
-          max_capacity: p.max_capacity,
+          max_capacity: Math.min(4, p.max_capacity),   // 過去レッスンの複製でも定員4名を超えない
           current_bookings: 0,
           price: p.price,
           is_ticket_eligible: p.is_ticket_eligible,
@@ -343,8 +343,9 @@ export function GroupLessons() {
               <input className="input" value={form.instructor_name} onChange={(e) => setForm({ ...form, instructor_name: e.target.value })} required />
             </div>
             <div className="field">
-              <label className="field-label">定員</label>
-              <input className="input" type="number" value={form.max_capacity} onChange={(e) => setForm({ ...form, max_capacity: Number(e.target.value) })} required />
+              <label className="field-label">定員（最大4名）</label>
+              <input className="input" type="number" min={1} max={4} value={form.max_capacity}
+                onChange={(e) => setForm({ ...form, max_capacity: Math.max(1, Math.min(4, Number(e.target.value) || 1)) })} required />
             </div>
             <div className="field">
               <label className="field-label">開始日時</label>
