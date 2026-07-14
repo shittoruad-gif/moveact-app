@@ -68,20 +68,29 @@ export function Dashboard() {
     if (mine) tomorrowQ = tomorrowQ.eq('staff_id', userId);
 
     // 今後7日間（本日含む）の予約 → 店舗別に日次集計してグラフ表示
+    //   AirReserveからの取込分（airreserve_events）も、移行期間中の実予約として含める。
+    //   ただし「予定」「入れ替え時間」等の内部ブロックはお客様の予約ではないため除外。
     const weekEnd = new Date(now);
     weekEnd.setDate(weekEnd.getDate() + 7);
+    const weekWindow = { from: `${todayStr}T00:00:00+09:00`, to: `${isoDay(weekEnd)}T00:00:00+09:00` };
     let weekQ: any = supabase
       .from('app_bookings')
       .select('starts_at, store_id')
       .in('status', ['confirmed', 'completed'])
-      .gte('starts_at', `${todayStr}T00:00:00+09:00`)
-      .lt('starts_at', `${isoDay(weekEnd)}T00:00:00+09:00`);
+      .gte('starts_at', weekWindow.from)
+      .lt('starts_at', weekWindow.to);
     if (mine) weekQ = weekQ.eq('staff_id', userId);
+    let weekAirQ: any = supabase
+      .from('airreserve_events')
+      .select('starts_at, store_id, summary')
+      .gte('starts_at', weekWindow.from)
+      .lt('starts_at', weekWindow.to);
+    if (mine) weekAirQ = weekAirQ.eq('staff_id', userId);
 
-    const [todayRes, tomorrowRes, weekRes] = await Promise.all([todayQ, tomorrowQ, weekQ]);
+    const [todayRes, tomorrowRes, weekRes, weekAirRes] = await Promise.all([todayQ, tomorrowQ, weekQ, weekAirQ]);
 
     // 取得に失敗したら0件と紛らわしいので明示的にエラー表示へ
-    if (todayRes.error || tomorrowRes.error || weekRes.error) {
+    if (todayRes.error || tomorrowRes.error || weekRes.error || weekAirRes.error) {
       setLoadError(true);
       setLoading(false);
       return;
@@ -97,11 +106,19 @@ export function Dashboard() {
       const iso = isoDay(d);
       days.push({ iso, label: `${d.getMonth() + 1}/${d.getDate()}`, weekday: WD[d.getDay()], tamashima: 0, kanamitsu: 0 });
     }
-    for (const b of ((weekRes.data as any) ?? []) as { starts_at: string; store_id: string }[]) {
-      const jst = new Date(new Date(b.starts_at).getTime() + 9 * 3600 * 1000);
+    const addToDay = (starts_at: string, store_id: string) => {
+      const jst = new Date(new Date(starts_at).getTime() + 9 * 3600 * 1000);
       const iso = jst.toISOString().slice(0, 10);
       const day = days.find((x) => x.iso === iso);
-      if (day && (b.store_id === 'tamashima' || b.store_id === 'kanamitsu')) day[b.store_id]++;
+      if (day && (store_id === 'tamashima' || store_id === 'kanamitsu')) day[store_id as StoreId]++;
+    };
+    for (const b of ((weekRes.data as any) ?? []) as { starts_at: string; store_id: string }[]) {
+      addToDay(b.starts_at, b.store_id);
+    }
+    const INTERNAL_BLOCKS = ['予定', '入れ替え時間'];
+    for (const ev of ((weekAirRes.data as any) ?? []) as { starts_at: string; store_id: string; summary: string | null }[]) {
+      if (INTERNAL_BLOCKS.includes((ev.summary ?? '').trim())) continue;
+      addToDay(ev.starts_at, ev.store_id);
     }
     setWeek(days);
 
@@ -195,6 +212,7 @@ export function Dashboard() {
           <div className="card card-pad" style={{ marginTop: 16 }}>
             <div style={{ ...kpiLabelStyle, marginBottom: 10 }}>
               今後7日間のご予約{!isAdmin && '（あなたの担当分）'}
+              <span style={{ fontWeight: 400, marginLeft: 8 }}>※AirReserveからの取込予約を含む</span>
             </div>
             {week.every((d) => d.tamashima + d.kanamitsu === 0) ? (
               <div className="empty" style={{ padding: '20px 10px' }}>今後7日間のご予約はまだありません。</div>
