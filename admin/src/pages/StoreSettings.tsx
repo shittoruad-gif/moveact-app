@@ -54,6 +54,19 @@ const INIT_CLOSED_FORM = {
   reason: '',
 };
 
+// ネット予約の受付締切の選択肢（分）
+const LEAD_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: '直前まで受け付ける（締切なし）' },
+  { value: 30, label: '30分前まで' },
+  { value: 60, label: '1時間前まで' },
+  { value: 120, label: '2時間前まで' },
+  { value: 180, label: '3時間前まで' },
+  { value: 360, label: '6時間前まで' },
+  { value: 720, label: '12時間前まで' },
+  { value: 1440, label: '24時間前（前日）まで' },
+  { value: 2880, label: '48時間前（2日前）まで' },
+];
+
 export function StoreSettings() {
   const [storeId, setStoreId] = useState<StoreId>('tamashima');
   const [hours, setHours] = useState<HourRow[]>(DEFAULT_HOURS);
@@ -64,6 +77,11 @@ export function StoreSettings() {
   const [closedForm, setClosedForm] = useState(INIT_CLOSED_FORM);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
+
+  // ネット予約の受付締切（stores.booking_lead_minutes）
+  const [leadMinutes, setLeadMinutes] = useState<number>(0);
+  const [leadLoading, setLeadLoading] = useState(true);
+  const [leadSaving, setLeadSaving] = useState(false);
 
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,8 +125,41 @@ export function StoreSettings() {
     setClosedDays((data as ClosedDayRow[]) ?? []);
   }, [storeId]);
 
+  // ── (c) ネット予約の受付締切の読み込み ──
+  const loadLead = useCallback(async () => {
+    setLeadLoading(true);
+    const { data, error: err } = await supabase
+      .from('stores')
+      .select('booking_lead_minutes')
+      .eq('id', storeId)
+      .maybeSingle();
+    if (!err) {
+      setLeadMinutes((data as { booking_lead_minutes: number | null } | null)?.booking_lead_minutes ?? 0);
+    }
+    setLeadLoading(false);
+  }, [storeId]);
+
   useEffect(() => { loadHours(); }, [loadHours]);
   useEffect(() => { loadClosedDays(); }, [loadClosedDays]);
+  useEffect(() => { loadLead(); }, [loadLead]);
+
+  // ── (c) ネット予約の受付締切の保存 ──
+  const handleSaveLead = async () => {
+    setSuccess(null);
+    setLeadSaving(true); setError(null);
+    const { error: err } = await supabase
+      .from('stores')
+      .update({ booking_lead_minutes: leadMinutes })
+      .eq('id', storeId);
+    setLeadSaving(false);
+    if (err) {
+      setError(`エラー: 受付締切の保存に失敗しました（${err.message}）`);
+      return;
+    }
+    const label = LEAD_OPTIONS.find(o => o.value === leadMinutes)?.label ?? `${leadMinutes}分前まで`;
+    flashSuccess(`${STORE_NAMES[storeId]}のネット予約の受付締切を「${label}」に保存しました`);
+    loadLead();
+  };
 
   const setHour = (dow: number, patch: Partial<HourRow>) =>
     setHours(hs => hs.map(h => (h.day_of_week === dow ? { ...h, ...patch } : h)));
@@ -317,6 +368,41 @@ export function StoreSettings() {
             {saving ? '保存中…' : '営業時間を保存する'}
           </button>
         </div>
+      </div>
+
+      {/* (c) ネット予約の受付締切 */}
+      <div className="card card-pad" style={{ marginBottom: 16 }}>
+        <h3 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 600 }}>
+          ネット予約の受付締切（{STORE_NAMES[storeId]}）
+        </h3>
+        <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--sub)', lineHeight: 1.7 }}>
+          お客様がネット予約できるのは、施術開始時刻のここで選んだ時間前までになります。
+          締切を過ぎた枠は予約画面に表示されません。<strong>管理画面からの手動予約には影響しません</strong>（直前でもスタッフは入れられます）。
+        </p>
+        {leadLoading ? (
+          <div style={{ padding: 8, color: 'var(--sub)', fontSize: 13 }}>読み込み中…</div>
+        ) : (
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select
+              className="select"
+              style={{ maxWidth: 320 }}
+              value={leadMinutes}
+              onChange={e => setLeadMinutes(Number(e.target.value))}
+              title="ネット予約をいつまで受け付けるかを選びます"
+            >
+              {LEAD_OPTIONS.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            <button
+              className="btn btn-primary"
+              onClick={handleSaveLead}
+              disabled={leadSaving || leadLoading}
+            >
+              {leadSaving ? '保存中…' : '受付締切を保存する'}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* (b) 臨時休業・特別営業 */}
