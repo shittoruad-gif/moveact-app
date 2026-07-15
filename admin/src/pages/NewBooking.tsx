@@ -1042,6 +1042,7 @@ export function NewBooking() {
                 <label className="field-label" htmlFor="nb-time">開始時刻 <RequiredBadge /></label>
                 <input
                   id="nb-time" type="time" className="input" step="600"
+                  min="06:00" max="23:50"
                   value={form.time} onChange={e => set('time', e.target.value)}
                 />
               </div>

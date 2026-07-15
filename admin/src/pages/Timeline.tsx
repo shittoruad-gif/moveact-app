@@ -321,7 +321,8 @@ export function Timeline() {
         <div>
           <h2 className="page-title">予約表</h2>
           <p className="page-help">
-            スタッフごとの予約状況を確認し、予約をクリックすると変更・キャンセルができます。空き枠をクリックすると新規予約・予定・休みを登録できます。
+            スタッフごとの予約状況を確認し、予約をクリックすると時間・長さの変更やキャンセルができます。空き枠をクリックすると新規予約・予定・休みを登録できます。
+            予約表は6:00〜24:00を表示します（営業時間外はスタッフだけが手動で予約を入れられます。お客様のネット予約は営業時間内のみ）。
           </p>
         </div>
       </div>
@@ -483,6 +484,13 @@ function StoreBoard({
     closeMin = hhmmToMin(FALLBACK_CLOSE);
   }
 
+  // 管理画面のグリッドは常に6:00〜24:00を表示（早朝・夜間の個人的な予約も入れて確認できる）。
+  // ネット予約でお客様が選べる時間は店舗の営業時間のままで変わらない。
+  const bizOpenMin = openMin;
+  const bizCloseMin = closeMin;
+  openMin = Math.min(openMin, 6 * 60);
+  closeMin = Math.max(closeMin, 24 * 60);
+
   const totalRows = Math.max(1, Math.round((closeMin - openMin) / ROW_MIN));
   const bodyHeight = totalRows * ROW_PX;
 
@@ -588,7 +596,9 @@ function StoreBoard({
               {hourMarks.map(m => (
                 <div key={m} style={{
                   position: 'absolute', top: (m - openMin) * PX_PER_MIN, left: 0, right: 0,
-                  fontSize: 12, color: 'var(--sub)', textAlign: 'right',
+                  fontSize: 12, textAlign: 'right',
+                  // 営業時間外（ネット予約対象外）の時刻はうすく表示して区別する
+                  color: m < bizOpenMin || m > bizCloseMin ? 'rgba(120, 113, 108, 0.45)' : 'var(--sub)',
                   paddingRight: 6, transform: 'translateY(-1px)',
                   fontVariantNumeric: 'tabular-nums',
                 }}>
@@ -910,8 +920,21 @@ function BookingEditModal({ b, onClose, onSaved }: {
 
   const selectedMenu = menuList.find(m => m.id === menuId);
   const menuChanged = menuId !== (b.treatment_menu_id ?? '');
-  // メニュー変更時は duration_minutes から ends_at を再計算
-  const durationMin = menuChanged ? (selectedMenu?.duration_minutes ?? 60) : origDurationMin;
+  // 所要時間（予約の長さ）: 「自動」= メニュー変更時はメニューの時間、据え置き時は元の長さ。
+  // 手動で選ぶと ends_at がその長さで再計算される。
+  const [durationSel, setDurationSel] = useState<number | null>(null);
+  const autoDurationMin = menuChanged ? (selectedMenu?.duration_minutes ?? 60) : origDurationMin;
+  const durationMin = durationSel ?? autoDurationMin;
+
+  const durationOptions = useMemo(() => {
+    const opts: number[] = [];
+    for (let m = 15; m <= 300; m += 15) opts.push(m);
+    if (!opts.includes(autoDurationMin)) {
+      opts.push(autoDurationMin);
+      opts.sort((a, b) => a - b);
+    }
+    return opts;
+  }, [autoDurationMin]);
 
   // 終了予定の表示（JST明示）
   const endPreview = useMemo(() => {
@@ -1084,13 +1107,29 @@ function BookingEditModal({ b, onClose, onSaved }: {
             </div>
             <div className="field" style={{ gridColumn: '1 / -1' }}>
               <label className="field-label">メニュー</label>
-              <select className="select" value={menuId} onChange={e => setMenuId(e.target.value)}>
+              <select
+                className="select"
+                value={menuId}
+                onChange={e => { setMenuId(e.target.value); setDurationSel(null); }}
+              >
                 <option value="">選択してください</option>
                 {menuList.map(m => (
                   <option key={m.id} value={m.id}>
                     {m.name}（{m.duration_minutes}分 / ¥{m.price.toLocaleString()}）
                   </option>
                 ))}
+              </select>
+            </div>
+            <div className="field">
+              <label className="field-label">所要時間（予約の長さ）</label>
+              <select
+                className="select"
+                value={durationSel ?? ''}
+                onChange={e => setDurationSel(e.target.value === '' ? null : Number(e.target.value))}
+                title="変更すると終了時刻がこの長さで計算し直されます"
+              >
+                <option value="">自動（{autoDurationMin}分）</option>
+                {durationOptions.map(m => <option key={m} value={m}>{m}分</option>)}
               </select>
             </div>
             <div className="field" style={{ gridColumn: '1 / -1' }}>
