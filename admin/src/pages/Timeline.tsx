@@ -94,6 +94,16 @@ interface Column {
   name: string;
 }
 
+// 空き枠クリックで開く「予約/予定/休み」登録モーダルのコンテキスト
+interface QuickSlotCtx {
+  store: StoreId;
+  staffId: string | null;
+  staffName: string;
+  slotMin: number;
+  openMin: number;
+  closeMin: number;
+}
+
 // ─────────────────────────────────────────────────────────────
 // 時刻ユーティリティ
 // ─────────────────────────────────────────────────────────────
@@ -174,6 +184,8 @@ export function Timeline() {
   const [loading, setLoading] = useState(false);
   // 予約ブロッククリックで開く変更モーダル（AirReserveブロックは対象外）
   const [editing, setEditing] = useState<BookingRow | null>(null);
+  // 空き枠クリックで開く「予約/予定/休み」登録モーダル
+  const [quickSlot, setQuickSlot] = useState<QuickSlotCtx | null>(null);
 
   // 現在時刻（分）— 60秒ごと更新
   const [nowMin, setNowMin] = useState<number>(() => {
@@ -229,7 +241,7 @@ export function Timeline() {
 
     let unavailQ = supabase
       .from('staff_unavailability')
-      .select('staff_id, store_id, starts_at, ends_at, reason, block_type')
+      .select('id, staff_id, store_id, starts_at, ends_at, reason, block_type')
       .gte('starts_at', lo)
       .lte('starts_at', hi);
     unavailQ = unavailQ.eq('store_id', storeFilter);
@@ -284,6 +296,20 @@ export function Timeline() {
     setDate(d);
   };
 
+  // 予約表から登録した予定・休みブロックの削除（入れ替え時間ブロックは対象外）
+  const handleUnavailDelete = async (u: UnavailRow) => {
+    if (!u.id) return;
+    const typeLabel = u.block_type === 'off' ? '休み' : '予定';
+    const range = `${fmtClock(u.starts_at)}〜${fmtClock(u.ends_at)}`;
+    if (!window.confirm(`この${typeLabel}（${range}${u.reason ? ` / ${u.reason}` : ''}）を削除します。この時間帯の予約枠が再び空きます。よろしいですか？`)) return;
+    const { error: err } = await supabase.from('staff_unavailability').delete().eq('id', u.id);
+    if (err) {
+      window.alert(`エラー: 削除に失敗しました（${err.message}）`);
+      return;
+    }
+    await load();
+  };
+
   // 描画対象の店舗
   const storesToRender: StoreId[] =
     [storeFilter];
@@ -295,7 +321,7 @@ export function Timeline() {
         <div>
           <h2 className="page-title">予約表</h2>
           <p className="page-help">
-            スタッフごとの予約状況を確認し、予約をクリックすると変更・キャンセルができます。空き枠をクリックすると新規予約を登録できます。
+            スタッフごとの予約状況を確認し、予約をクリックすると変更・キャンセルができます。空き枠をクリックすると新規予約・予定・休みを登録できます。
           </p>
         </div>
       </div>
@@ -369,6 +395,8 @@ export function Timeline() {
             nowMin={nowMin}
             dayStr={dayStr}
             onBookingClick={setEditing}
+            onEmptyClick={setQuickSlot}
+            onUnavailDelete={handleUnavailDelete}
           />
         ))
       )}
@@ -384,6 +412,21 @@ export function Timeline() {
           }}
         />
       )}
+
+      {/* 空き枠クリック → 新規予約/予定/休みの登録モーダル */}
+      {quickSlot && (
+        <QuickSlotModal
+          ctx={quickSlot}
+          dayStr={dayStr}
+          bookings={bookings}
+          airEvents={airEvents}
+          onClose={() => setQuickSlot(null)}
+          onSaved={async () => {
+            setQuickSlot(null);
+            await load();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -392,7 +435,7 @@ export function Timeline() {
 // 店舗ごとのボード
 // ─────────────────────────────────────────────────────────────
 function StoreBoard({
-  store, showStoreLabel, roster, hours, closedDays, bookings, unavail, airEvents, weeklyShifts, dow, isToday, nowMin, dayStr, onBookingClick,
+  store, showStoreLabel, roster, hours, closedDays, bookings, unavail, airEvents, weeklyShifts, dow, isToday, nowMin, dayStr, onBookingClick, onEmptyClick, onUnavailDelete,
 }: {
   store: StoreId;
   showStoreLabel: boolean;
@@ -408,9 +451,9 @@ function StoreBoard({
   nowMin: number;
   dayStr: string;
   onBookingClick: (b: BookingRow) => void;
+  onEmptyClick: (ctx: QuickSlotCtx) => void;
+  onUnavailDelete: (u: UnavailRow) => void;
 }) {
-  const navigate = useNavigate();
-
   // 営業時間（例外日 > 通常曜日 > フォールバック）
   const closedDay = closedDays.find(c => c.date === dayStr); // 店舗非依存テーブル想定
   const hRow = hours.find(h => h.store_id === store && h.day_of_week === dow);
@@ -488,10 +531,7 @@ function StoreBoard({
   for (let m = Math.ceil(openMin / 60) * 60; m <= closeMin; m += 60) hourMarks.push(m);
 
   const handleEmptyClick = (col: Column, slotMin: number) => {
-    const t = minToHHMM(slotMin);
-    navigate(
-      `/new-booking?store=${store}&staff=${col.staffId ?? ''}&date=${dayStr}&time=${t}`,
-    );
+    onEmptyClick({ store, staffId: col.staffId, staffName: col.name, slotMin, openMin, closeMin });
   };
 
   return (
@@ -589,7 +629,7 @@ function StoreBoard({
                       <div
                         key={ri}
                         onClick={() => handleEmptyClick(col, slotMin)}
-                        title={`${minToHHMM(slotMin)} クリックで新規予約`}
+                        title={`${minToHHMM(slotMin)} クリックで予約・予定・休みを登録`}
                         style={{
                           position: 'absolute', top: ri * ROW_PX, left: 0, right: 0,
                           height: ROW_PX, boxSizing: 'border-box',
@@ -629,9 +669,15 @@ function StoreBoard({
                     );
                   })}
 
-                  {/* 非稼働ブロック（灰色斜線） */}
+                  {/* 非稼働ブロック（灰色斜線）。予定・休みはクリックで削除できる */}
                   {colUnavail.map((u, ui) => (
-                    <UnavailBlock key={`u-${ui}`} u={u} openMin={openMin} closeMin={closeMin} />
+                    <UnavailBlock
+                      key={`u-${ui}`}
+                      u={u}
+                      openMin={openMin}
+                      closeMin={closeMin}
+                      onDelete={u.id && u.block_type !== 'changeover' ? () => onUnavailDelete(u) : undefined}
+                    />
                   ))}
 
                   {/* AirReserve取込ブロック（読み取り専用） */}
@@ -1124,6 +1170,220 @@ function BookingEditModal({ b, onClose, onSaved }: {
 }
 
 // ─────────────────────────────────────────────────────────────
+// 空き枠クリックモーダル（新規予約へ進む / 予定・休みをその場で登録）
+//   予定・休みは staff_unavailability にINSERT（スタッフ休み登録ページと同方式）。
+//   日時はJST明示（+09:00）で保存する。
+// ─────────────────────────────────────────────────────────────
+function QuickSlotModal({ ctx, dayStr, bookings, airEvents, onClose, onSaved }: {
+  ctx: QuickSlotCtx;
+  dayStr: string;
+  bookings: BookingRow[];
+  airEvents: AirReserveRow[];
+  onClose: () => void;
+  onSaved: () => Promise<void> | void;
+}) {
+  const navigate = useNavigate();
+  // 未割当レーンにはスタッフ紐付きの予定・休みを登録できない
+  const canBlock = ctx.staffId !== null;
+  const [mode, setMode] = useState<'booking' | 'busy' | 'off'>('booking');
+  const [startTime, setStartTime] = useState(minToHHMM(ctx.slotMin));
+  const [endTime, setEndTime] = useState(minToHHMM(Math.min(ctx.slotMin + 60, ctx.closeMin)));
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const timeOptions = useMemo(() => {
+    const opts: string[] = [];
+    for (let m = 6 * 60; m <= 23 * 60 + 45; m += 15) opts.push(minToHHMM(m));
+    return opts;
+  }, []);
+
+  // 入力中の時間帯と既存予約（app_bookings + AirReserve）の重なり（注意喚起のみ・登録は可能）
+  const hasOverlap = useMemo(() => {
+    if (!ctx.staffId || startTime >= endTime) return false;
+    const hits = (sIso: string, eIso: string) =>
+      isoToJstParts(sIso).time < endTime && isoToJstParts(eIso).time > startTime;
+    const bkEnd = (b: BookingRow) =>
+      b.ends_at ?? new Date(new Date(b.starts_at).getTime() + (b.menu?.duration_minutes ?? 60) * 60_000).toISOString();
+    return (
+      bookings.some(b => b.staff_id === ctx.staffId && b.status !== 'cancelled' && hits(b.starts_at, bkEnd(b))) ||
+      airEvents.some(a => a.staff_id === ctx.staffId && hits(a.starts_at, a.ends_at))
+    );
+  }, [bookings, airEvents, ctx.staffId, startTime, endTime]);
+
+  const handleRegister = async () => {
+    if (!ctx.staffId) return;
+    if (startTime >= endTime) { setError('終了時刻は開始時刻より後にしてください'); return; }
+    setSaving(true);
+    setError(null);
+    const { data: { session } } = await supabase.auth.getSession();
+    const { error: err } = await supabase.from('staff_unavailability').insert({
+      staff_id: ctx.staffId,
+      store_id: ctx.store,
+      starts_at: `${dayStr}T${startTime}:00+09:00`,
+      ends_at: `${dayStr}T${endTime}:00+09:00`,
+      reason: reason.trim() || null,
+      block_type: mode === 'off' ? 'off' : 'busy',
+      created_by: session?.user.id ?? null,
+    });
+    setSaving(false);
+    if (err) {
+      setError(`エラー: 登録に失敗しました（${err.message}）`);
+      return;
+    }
+    await onSaved();
+  };
+
+  const dateLabel = new Date(`${dayStr}T00:00:00+09:00`).toLocaleDateString('ja-JP', {
+    timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short',
+  });
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal"
+        onClick={e => e.stopPropagation()}
+        style={{ width: 'min(480px, 100%)', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
+      >
+        <div className="modal-head" style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--ink)' }}>この枠に登録</span>
+          <button
+            type="button"
+            onClick={onClose}
+            title="登録せずに閉じます"
+            aria-label="閉じる"
+            style={{
+              marginLeft: 'auto', border: 'none', background: 'transparent', cursor: 'pointer',
+              fontSize: 20, lineHeight: 1, color: 'var(--sub)', padding: 4,
+            }}
+          >×</button>
+        </div>
+
+        <div style={{ padding: 20, overflowY: 'auto' }}>
+          <div className="note" style={{ marginBottom: 16, lineHeight: 1.7 }}>
+            {STORE_NAMES[ctx.store]} / <strong>{ctx.staffName}</strong> / {dateLabel} {minToHHMM(ctx.slotMin)}〜
+          </div>
+
+          <div className="field" style={{ marginBottom: 12 }}>
+            <label className="field-label">登録する内容</label>
+            <div className="seg">
+              <button
+                type="button"
+                className={`seg-btn${mode === 'booking' ? ' seg-btn--active' : ''}`}
+                onClick={() => setMode('booking')}
+                title="お客様の予約を登録します（予約入力画面へ進みます）"
+              >新規予約</button>
+              <button
+                type="button"
+                className={`seg-btn${mode === 'busy' ? ' seg-btn--active' : ''}`}
+                onClick={() => setMode('busy')}
+                disabled={!canBlock}
+                title="外出・会議などの予定でこの時間の予約を止めます"
+              >予定</button>
+              <button
+                type="button"
+                className={`seg-btn${mode === 'off' ? ' seg-btn--active' : ''}`}
+                onClick={() => setMode('off')}
+                disabled={!canBlock}
+                title="休みとしてこの時間の予約を止めます"
+              >休み</button>
+            </div>
+          </div>
+
+          {!canBlock && (
+            <div className="note" style={{ marginBottom: 12 }}>
+              未割当の列には予定・休みは登録できません。予定・休みを入れる場合はスタッフの列の枠をクリックしてください。
+            </div>
+          )}
+
+          {mode === 'booking' ? (
+            <div className="note" style={{ lineHeight: 1.7 }}>
+              「予約入力へ進む」を押すと、この店舗・スタッフ・時間が入った状態で手動予約入力画面が開きます。
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="field">
+                  <label className="field-label">開始時刻</label>
+                  <select className="select" value={startTime} onChange={e => setStartTime(e.target.value)}>
+                    {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div className="field">
+                  <label className="field-label">終了時刻</label>
+                  <select className="select" value={endTime} onChange={e => setEndTime(e.target.value)}>
+                    {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div className="field" style={{ gridColumn: '1 / -1' }}>
+                  <label className="field-label">理由・メモ</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder={mode === 'off' ? '例）有休 / 通院' : '例）外出 / 研修 / 会議'}
+                    value={reason}
+                    onChange={e => setReason(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => { setStartTime(minToHHMM(ctx.openMin)); setEndTime(minToHHMM(ctx.closeMin)); }}
+                  title="開始・終了を営業時間いっぱいにします（終日の休みなど）"
+                >終日にする</button>
+              </div>
+
+              <div className="note" style={{ marginTop: 12, lineHeight: 1.7 }}>
+                登録した時間帯は、このスタッフの予約枠がブロックされます（ネット予約・予約表に反映されます）。
+              </div>
+
+              {hasOverlap && (
+                <div style={{
+                  marginTop: 12, padding: '10px 12px', background: 'var(--amber-weak)',
+                  color: 'var(--amber)', borderRadius: 8, fontSize: 13, lineHeight: 1.6,
+                }}>
+                  この時間帯には既に予約があります。予約はそのまま残るため、必要なら先に予約を変更してください。
+                </div>
+              )}
+
+              {error && (
+                <div style={{
+                  marginTop: 12, padding: '10px 14px', background: 'var(--red-weak)',
+                  borderRadius: 8, color: 'var(--red)', fontSize: 13,
+                }}>
+                  {error}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="modal-foot" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexShrink: 0 }}>
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>閉じる</button>
+          {mode === 'booking' ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => navigate(`/new-booking?store=${ctx.store}&staff=${ctx.staffId ?? ''}&date=${dayStr}&time=${minToHHMM(ctx.slotMin)}`)}
+            >予約入力へ進む</button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleRegister}
+              disabled={saving || !canBlock}
+            >{saving ? '登録中…' : mode === 'off' ? '休みを登録する' : '予定を登録する'}</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // AirReserve取込ブロック（読み取り専用・purple-weak地）
 // ─────────────────────────────────────────────────────────────
 function AirReserveBlock({ ev, openMin, closeMin }: { ev: AirReserveRow; openMin: number; closeMin: number }) {
@@ -1182,7 +1442,7 @@ function AirReserveBlock({ ev, openMin, closeMin }: { ev: AirReserveRow; openMin
 // ─────────────────────────────────────────────────────────────
 // 非稼働ブロック（灰色斜線）
 // ─────────────────────────────────────────────────────────────
-function UnavailBlock({ u, openMin, closeMin }: { u: UnavailRow; openMin: number; closeMin: number }) {
+function UnavailBlock({ u, openMin, closeMin, onDelete }: { u: UnavailRow; openMin: number; closeMin: number; onDelete?: () => void }) {
   const startMin = dateToMinOfDay(u.starts_at);
   const endMin = dateToMinOfDay(u.ends_at);
   const top = (startMin - openMin) * PX_PER_MIN;
@@ -1199,7 +1459,8 @@ function UnavailBlock({ u, openMin, closeMin }: { u: UnavailRow; openMin: number
 
   return (
     <div
-      title={`${fmtClock(u.starts_at)}〜${fmtClock(u.ends_at)} ${label}（この時間帯は予約できません）`}
+      title={`${fmtClock(u.starts_at)}〜${fmtClock(u.ends_at)} ${label}（この時間帯は予約できません${onDelete ? '。クリックで削除できます' : ''}）`}
+      onClick={onDelete ? e => { e.stopPropagation(); onDelete(); } : undefined}
       style={{
         position: 'absolute', top, left: 2, right: 2, height: height - 2,
         boxSizing: 'border-box', borderRadius: 4, zIndex: 1, overflow: 'hidden',
@@ -1209,6 +1470,7 @@ function UnavailBlock({ u, openMin, closeMin }: { u: UnavailRow; openMin: number
           'repeating-linear-gradient(45deg, rgba(0,0,0,0.05) 0, rgba(0,0,0,0.05) 4px, transparent 4px, transparent 8px)',
         display: 'flex', alignItems: 'flex-start',
         padding: '2px 6px', fontSize: 10, color: 'var(--sub)', fontWeight: 600,
+        cursor: onDelete ? 'pointer' : 'default',
       }}
     >
       {label}
