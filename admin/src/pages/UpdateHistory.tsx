@@ -87,33 +87,21 @@ export function UpdateHistory() {
         <div className="empty">該当する履歴はまだありません。</div>
       ) : (
         <div className="card card-pad">
-          <div style={{ overflowX: 'auto' }}>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={th}>日時</th>
-                  <th style={th}>操作者</th>
-                  <th style={th}>種類</th>
-                  <th style={th}>操作</th>
-                  <th style={th}>内容</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id}>
-                    <td style={{ ...td, whiteSpace: 'nowrap', color: 'var(--sub)' }}>{fmtJst(r.at)}</td>
-                    <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{r.actor_name}</td>
-                    <td style={td}>{ENTITY_LABEL[r.entity] ?? r.entity}</td>
-                    <td style={td}>
-                      <span className={`badge ${r.action === 'delete' ? 'badge-red' : r.action === 'update' ? 'badge-amber' : 'badge-green'}`}>
-                        {ACTION_LABEL[r.action] ?? r.action}
-                      </span>
-                    </td>
-                    <td style={td}>{r.summary}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {/* スマホでも横スクロールなしで全情報が読めるよう、表ではなくリスト形式で表示 */}
+          <div>
+            {rows.map((r) => (
+              <div key={r.id} style={{ padding: '10px 2px', borderBottom: '1px solid var(--line)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                  <span style={{ fontSize: 12.5, color: 'var(--sub)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmtJst(r.at)}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.actor_name}</span>
+                  <span style={{ fontSize: 12, color: 'var(--sub)' }}>{ENTITY_LABEL[r.entity] ?? r.entity}</span>
+                  <span className={`badge ${r.action === 'delete' ? 'badge-red' : r.action === 'update' ? 'badge-amber' : 'badge-green'}`}>
+                    {ACTION_LABEL[r.action] ?? r.action}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.7, overflowWrap: 'anywhere' }}>{r.summary}</div>
+              </div>
+            ))}
           </div>
           <p style={{ fontSize: 12, color: 'var(--sub)', marginTop: 10 }}>
             ※ 最新300件を表示しています。「操作者」がネット予約/システムのものは、お客様のネット予約や自動処理による変更です。
@@ -124,6 +112,3 @@ export function UpdateHistory() {
   );
 }
 
-const tableStyle: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 13.5, minWidth: 680 };
-const th: React.CSSProperties = { textAlign: 'left', padding: '9px 12px', borderBottom: '2px solid var(--line)', color: 'var(--sub)', fontWeight: 700, whiteSpace: 'nowrap', fontSize: 12.5 };
-const td: React.CSSProperties = { padding: '9px 12px', borderBottom: '1px solid var(--line)', color: 'var(--ink)', verticalAlign: 'top' };

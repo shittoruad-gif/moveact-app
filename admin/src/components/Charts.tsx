@@ -78,7 +78,9 @@ export function WeekBookingsChart({ days, single }: { days: DayCount[]; single?:
           <LegendSwatch color={STORE_COLORS.kanamitsu} label={STORE_LABELS.kanamitsu} />
         </div>
       )}
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" aria-label="今後7日間の予約数">
+      {/* スマホでは縮めず横スクロール（縮小するとラベルが読めなくなる） */}
+      <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', minWidth: 520, height: 'auto', display: 'block' }} role="img" aria-label="今後7日間の予約数">
         {/* 控えめなグリッドと目盛り */}
         {ticks.map((t) => (
           <g key={t}>
@@ -122,6 +124,7 @@ export function WeekBookingsChart({ days, single }: { days: DayCount[]; single?:
           );
         })}
       </svg>
+      </div>
       <Tooltip tip={tip} />
     </div>
   );

@@ -28,7 +28,8 @@ function fmtTime(iso: string) {
 }
 
 function fmtDate(d: Date) {
-  return d.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
+  // 年は省略（スマホで2行に折り返すため）
+  return d.toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' });
 }
 
 function isoDay(d: Date) {

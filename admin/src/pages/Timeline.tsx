@@ -104,7 +104,8 @@ function isoDay(d: Date) {
   return `${y}-${m}-${day}`;
 }
 function fmtHeading(d: Date) {
-  return d.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
+  // 年は省略（スマホで「2026年7月15日(水)」が2行に折り返すため。年跨ぎ操作は稀）
+  return d.toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' });
 }
 // 'HH:MM' → 0時からの分
 function hhmmToMin(hhmm: string): number {
