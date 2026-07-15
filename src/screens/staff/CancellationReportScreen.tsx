@@ -32,7 +32,7 @@ export function CancellationReportScreen() {
     setLoading(true);
     const { data } = await supabase
       .from('app_bookings')
-      .select('id, user_id, status, starts_at, treatment_menu:treatment_menus(name), profile:profiles(full_name, phone, line_user_id)')
+      .select('id, user_id, status, starts_at, treatment_menu:treatment_menus(name), profile:user_id(full_name, phone, line_user_id)')
       .eq('store_id', selectedStore)
       .gte('starts_at', sinceISO);
     setBookings(data ?? []);

@@ -55,6 +55,7 @@ interface BookingRow {
   source: string | null;
   guest_name: string | null;
   guest_phone: string | null;
+  guest_email: string | null;
   is_first_visit: boolean;
   deposit_status: string | null;
   customer_request: string | null;
@@ -152,6 +153,8 @@ export function Timeline() {
   const [closedDays, setClosedDays] = useState<ClosedDayRow[]>([]);
   const [bookings, setBookings] = useState<BookingRow[]>([]);
   const [unavail, setUnavail] = useState<UnavailRow[]>([]);
+  // 取得エラーは必ず画面に出す（握りつぶすと「予約0件」と区別できず事故になる）
+  const [loadErr, setLoadErr] = useState<string | null>(null);
   const [airEvents, setAirEvents] = useState<AirReserveRow[]>([]);
   const [loading, setLoading] = useState(false);
   // 予約ブロッククリックで開く変更モーダル（AirReserveブロックは対象外）
@@ -200,7 +203,7 @@ export function Timeline() {
       .from('app_bookings')
       .select(`
         id, store_id, staff_id, treatment_menu_id, starts_at, ends_at, status, source,
-        guest_name, guest_phone, is_first_visit, deposit_status, customer_request,
+        guest_name, guest_phone, guest_email, is_first_visit, deposit_status, customer_request,
         menu:treatment_menu_id(name, duration_minutes, price),
         staff:staff_id(full_name)
       `)
@@ -226,6 +229,12 @@ export function Timeline() {
     if (storeFilter !== 'all') airQ = airQ.eq('store_id', storeFilter);
 
     const [r, h, c, b, u, a] = await Promise.all([rosterQ, hoursQ, closedQ, bookingsQ, unavailQ, airQ]);
+
+    // どれか1つでも失敗したら明示（0件表示と混同させない）
+    const firstErr = r.error ?? h.error ?? c.error ?? b.error ?? u.error ?? a.error;
+    setLoadErr(firstErr
+      ? `予約データの取得に失敗しました。表示が0件でも実際には予約が入っている可能性があります。再読み込みしても直らない場合は管理者へ連絡してください。（詳細: ${firstErr.message}）`
+      : null);
 
     const airRows = ((a.data as AirReserveRow[]) ?? []).filter(ev => {
       if (ev.staff_id === null) {
@@ -306,6 +315,15 @@ export function Timeline() {
 
       {/* 凡例 */}
       <Legend />
+
+      {loadErr && (
+        <div className="card card-pad" style={{ background: 'var(--red-weak)', color: 'var(--red)', fontSize: 13.5, lineHeight: 1.8, marginBottom: 12 }}>
+          {loadErr}
+          <div style={{ marginTop: 8 }}>
+            <button type="button" className="btn btn-sm" onClick={() => load()}>再読み込み</button>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="card">
@@ -911,6 +929,9 @@ function BookingEditModal({ b, onClose, onSaved }: {
             </div>
             <div style={{ color: 'var(--sub)' }}>
               電話: {b.guest_phone ?? '（未登録）'}
+            </div>
+            <div style={{ color: 'var(--sub)' }}>
+              メール: {b.guest_email ?? '（未登録）'}
             </div>
             <div style={{ color: 'var(--sub)' }}>
               現在: {fmtClock(b.starts_at)}{b.ends_at ? `〜${fmtClock(b.ends_at)}` : ''} / {b.menu?.name ?? 'メニュー不明'} / {STATUS_LABELS[b.status] ?? b.status}

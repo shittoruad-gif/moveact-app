@@ -281,6 +281,8 @@ export function NewBooking() {
   const [error, setError]         = useState<string | null>(null);
   const [dayRows, setDayRows]     = useState<DayRow[]>([]);
   const [dayLoading, setDayLoading] = useState(false);
+  // 取得エラーは必ず画面に出す（「予約なし」と誤認して二重登録する事故を防ぐ）
+  const [dayErr, setDayErr] = useState<string | null>(null);
 
   // ── 繰り返し予約 ──
   const [recurOn, setRecurOn]         = useState(false);
@@ -428,6 +430,11 @@ export function NewBooking() {
       status: '',
       depositStatus: '',
     }));
+
+    const fetchErr = b.error ?? a.error;
+    setDayErr(fetchErr
+      ? `予約状況の取得に失敗しました。既存の予約が表示されていない可能性があるため、登録前にご注意ください。（詳細: ${fetchErr.message}）`
+      : null);
 
     setDayRows(
       [...appRows, ...airRows].sort((x, y) => x.starts_at.localeCompare(y.starts_at)),
@@ -1292,6 +1299,11 @@ export function NewBooking() {
               </span>
             </div>
 
+            {dayErr && (
+              <div style={{ background: 'var(--red-weak)', color: 'var(--red)', fontSize: 12.5, lineHeight: 1.7, borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
+                {dayErr}
+              </div>
+            )}
             {dayLoading ? (
               <p style={{ margin: 0, fontSize: 13, color: 'var(--sub)' }}>読み込み中…</p>
             ) : dayRows.length === 0 ? (

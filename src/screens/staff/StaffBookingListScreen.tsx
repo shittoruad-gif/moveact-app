@@ -23,7 +23,7 @@ export function StaffBookingListScreen() {
     const dateStr = selectedDate.toISOString().slice(0, 10);
     const { data } = await supabase
       .from('app_bookings')
-      .select('*, treatment_menu:treatment_menus(name, duration_minutes, price), profile:profiles(full_name, phone, line_user_id)')
+      .select('*, treatment_menu:treatment_menus(name, duration_minutes, price), profile:user_id(full_name, phone, line_user_id)')
       .eq('store_id', selectedStore)
       .gte('starts_at', `${dateStr}T00:00:00`)
       .lte('starts_at', `${dateStr}T23:59:59`)

@@ -14,6 +14,7 @@ interface Booking {
   source: string;
   guest_name: string | null;
   guest_phone: string | null;
+  guest_email: string | null;
   is_first_visit: boolean;
   deposit_status: string;
   customer_request: string | null;
@@ -45,6 +46,8 @@ export function Bookings() {
   const [cancelling, setCancelling] = useState<string | null>(null);
   const [updating, setUpdating] = useState<string | null>(null);
   const [pendingOnly, setPendingOnly] = useState(false);
+  // 取得エラーは必ず画面に出す（握りつぶすと「予約0件」と区別できず事故になる）
+  const [fetchErr, setFetchErr] = useState<string | null>(null);
 
   const fetchBookings = useCallback(async () => {
     setLoading(true);
@@ -53,7 +56,7 @@ export function Bookings() {
       .from('app_bookings')
       .select(`
         id, store_id, starts_at, ends_at, status, source,
-        guest_name, guest_phone, is_first_visit, deposit_status, customer_request,
+        guest_name, guest_phone, guest_email, is_first_visit, deposit_status, customer_request,
         menu:treatment_menu_id(name, duration_minutes, price),
         staff:staff_id(full_name)
       `)
@@ -64,7 +67,10 @@ export function Bookings() {
 
     if (storeFilter !== 'all') query = query.eq('store_id', storeFilter);
 
-    const { data } = await query;
+    const { data, error } = await query;
+    setFetchErr(error
+      ? `予約データの取得に失敗しました。表示が0件でも実際には予約が入っている可能性があります。（詳細: ${error.message}）`
+      : null);
     setBookings((data as any) ?? []);
     setLoading(false);
   }, [date, storeFilter]);
@@ -157,6 +163,14 @@ export function Bookings() {
         <button type="button" className="btn btn-sm" onClick={() => moveDate(1)} title="次の日の予約を表示します">翌日</button>
       </div>
 
+      {fetchErr && (
+        <div className="card card-pad" style={{ background: 'var(--red-weak)', color: 'var(--red)', fontSize: 13.5, lineHeight: 1.8, marginBottom: 12 }}>
+          {fetchErr}
+          <div style={{ marginTop: 8 }}>
+            <button type="button" className="btn btn-sm" onClick={() => fetchBookings()}>再読み込み</button>
+          </div>
+        </div>
+      )}
       {loading ? (
         <div className="card card-pad" style={{ textAlign: 'center', color: 'var(--sub)' }}>読み込み中…</div>
       ) : (
@@ -265,6 +279,11 @@ function BookingRow({ b, onCancel, onStatusChange, cancelling, updating, showAct
           <span style={{ fontWeight: 600 }}>{b.guest_name ?? '（名前未記入）'}</span>
           <span style={{ fontSize: 13, color: 'var(--sub)' }}>{meta}</span>
         </div>
+        {b.guest_email && (
+          <div style={{ fontSize: 12, color: 'var(--sub)', marginTop: 2 }} title="お客様のメールアドレスです">
+            メール: {b.guest_email}
+          </div>
+        )}
         {b.customer_request && (
           <div style={{ fontSize: 12, color: 'var(--sub)', marginTop: 2 }} title="お客様からの要望です">
             要望: {b.customer_request}

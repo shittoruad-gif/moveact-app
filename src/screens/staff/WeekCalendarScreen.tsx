@@ -11,8 +11,10 @@ import { COLORS } from '../../lib/constants';
 import { supabase } from '../../lib/supabase';
 import { useStoreSelection } from '../../stores/storeSelectionStore';
 
-const HOUR_START = 9;
-const HOUR_END = 20;
+// 描画レンジは store_business_hours（両店・全曜日 06:00〜22:30 / migration 097）に合わせる。
+// 早朝・夜間の実予約（例: 三上 06:30〜 / 〜22:30）が枠外に消えないように。
+const HOUR_START = 6; // 06:00
+const HOUR_END = 22.5; // 22:30
 const ROW_HEIGHT = 16; // px per 15 min
 const COL_WIDTH = 110;
 
@@ -57,7 +59,7 @@ export function WeekCalendarScreen() {
     const [bookingsRes, airRes, unavailRes] = await Promise.all([
       supabase
         .from('app_bookings')
-        .select('id, starts_at, ends_at, status, store_id, treatment_menu:treatment_menus(name), profile:profiles(full_name)')
+        .select('id, starts_at, ends_at, status, store_id, treatment_menu:treatment_menus(name), profile:user_id(full_name)')
         .eq('store_id', selectedStore)
         .gte('starts_at', startISO)
         .lt('starts_at', endISO)
@@ -131,15 +133,20 @@ export function WeekCalendarScreen() {
     return `${e.getMonth() + 1}/${e.getDate()}`;
   })()}`;
 
-  const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START + i);
-  const totalHeight = hours.length * 4 * ROW_HEIGHT;
+  // 時ラベル（HOUR_END が半端な場合、最終ブロックは 15分単位で短くなる）
+  const hours = Array.from({ length: Math.ceil(HOUR_END - HOUR_START) }, (_, i) => HOUR_START + i);
+  const quartersForHour = (h: number) => Math.min(4, Math.round((HOUR_END - h) * 4));
+  const totalHeight = Math.round((HOUR_END - HOUR_START) * 4) * ROW_HEIGHT;
 
   function eventOffset(ev: CalEvent, dayStart: Date) {
     const s = new Date(ev.starts_at).getTime();
     const e = new Date(ev.ends_at).getTime();
     const dayStartMs = dayStart.getTime() + HOUR_START * 60 * 60 * 1000;
-    const top = ((s - dayStartMs) / (15 * 60 * 1000)) * ROW_HEIGHT;
-    const height = Math.max(ROW_HEIGHT, ((e - s) / (15 * 60 * 1000)) * ROW_HEIGHT);
+    const rawTop = ((s - dayStartMs) / (15 * 60 * 1000)) * ROW_HEIGHT;
+    const rawHeight = Math.max(ROW_HEIGHT, ((e - s) / (15 * 60 * 1000)) * ROW_HEIGHT);
+    // 描画レンジ外にはみ出さないようにクランプ（レンジ外開始の予約も先頭に見える）
+    const top = Math.min(Math.max(rawTop, 0), totalHeight - ROW_HEIGHT);
+    const height = Math.max(ROW_HEIGHT, Math.min(rawHeight, totalHeight - top));
     return { top, height };
   }
 
@@ -200,7 +207,7 @@ export function WeekCalendarScreen() {
               {/* Hour labels column */}
               <View style={{ width: 44 }}>
                 {hours.map((h) => (
-                  <View key={h} style={{ height: 4 * ROW_HEIGHT, borderTopWidth: 1, borderTopColor: COLORS.borderLight }}>
+                  <View key={h} style={{ height: quartersForHour(h) * ROW_HEIGHT, borderTopWidth: 1, borderTopColor: COLORS.borderLight }}>
                     <Text style={styles.hourLabel}>{h}:00</Text>
                   </View>
                 ))}
@@ -221,7 +228,7 @@ export function WeekCalendarScreen() {
                   <View key={d.toISOString()} style={{ width: COL_WIDTH, height: totalHeight, borderLeftWidth: 1, borderLeftColor: COLORS.borderLight }}>
                     {/* Hour gridlines */}
                     {hours.map((h) => (
-                      <View key={h} style={{ height: 4 * ROW_HEIGHT, borderTopWidth: 1, borderTopColor: COLORS.borderLight }} />
+                      <View key={h} style={{ height: quartersForHour(h) * ROW_HEIGHT, borderTopWidth: 1, borderTopColor: COLORS.borderLight }} />
                     ))}
                     {/* Events */}
                     {dayEvents.map((ev) => {

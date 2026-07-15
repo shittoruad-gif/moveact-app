@@ -202,6 +202,8 @@ export function StaffOff() {
   // 選択中スタッフ・日付の予約状況（共通仕様 loadDayBookings のスタッフ絞り版）
   const [dayBookings, setDayBookings] = useState<DayBooking[]>([]);
   const [dayLoading, setDayLoading] = useState(false);
+  // 取得エラーは必ず画面に出す（「予約なし」と誤認して休みを重ねる事故を防ぐ）
+  const [dayErr, setDayErr] = useState<string | null>(null);
 
   // 先月の休みをコピー
   const [copyTargetMonth, setCopyTargetMonth] = useState<'this' | 'next'>('this');
@@ -300,6 +302,11 @@ export function StaffOff() {
         staffName,
         isAirReserve: true,
       }));
+
+      const fetchErr = appRes.error ?? airRes.error;
+      setDayErr(fetchErr
+        ? `予約状況の取得に失敗しました。既存の予約が表示されていない可能性があります。（詳細: ${fetchErr.message}）`
+        : null);
 
       setDayBookings(
         [...appRows, ...airRows].sort((a, b) => a.startsAt.localeCompare(b.startsAt)),
@@ -718,6 +725,11 @@ export function StaffOff() {
               : '予約状況'}
           </h3>
 
+          {dayErr && (
+            <div style={{ background: 'var(--red-weak)', color: 'var(--red)', fontSize: 12.5, lineHeight: 1.7, borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
+              {dayErr}
+            </div>
+          )}
           {!form.staffId || !form.date ? (
             <div className="empty">スタッフと日付を選ぶと、その日の予約状況が表示されます。</div>
           ) : dayLoading ? (

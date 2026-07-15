@@ -50,7 +50,7 @@ export function StaffDashboardScreen() {
       supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'customer'),
       supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'customer').gte('created_at', monthStart),
       supabase.from('counseling_sheets').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
-      supabase.from('app_bookings').select('*, treatment_menu:treatment_menus(name), profile:profiles(full_name, phone)')
+      supabase.from('app_bookings').select('*, treatment_menu:treatment_menus(name), profile:user_id(full_name, phone)')
         .eq('store_id', selectedStore).gte('starts_at', `${today}T00:00:00`).lte('starts_at', `${today}T23:59:59`)
         .neq('status', 'cancelled').order('starts_at'),
       supabase.from('staff_notes').select('id').order('created_at', { ascending: false }).limit(50),

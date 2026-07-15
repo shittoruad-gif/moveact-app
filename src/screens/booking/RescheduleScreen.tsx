@@ -30,7 +30,7 @@ export function RescheduleScreen({ route, navigation }: any) {
   async function fetchBooking() {
     const { data } = await supabase
       .from('app_bookings')
-      .select('*, treatment_menu:treatment_menus(name, duration_minutes), profile:profiles(full_name)')
+      .select('*, treatment_menu:treatment_menus(name, duration_minutes), profile:user_id(full_name)')
       .eq('id', bookingId)
       .single();
     setBooking(data);
@@ -64,8 +64,6 @@ export function RescheduleScreen({ route, navigation }: any) {
     const [h, m] = time.split(':').map(Number);
     const newStart = new Date(selectedDate);
     newStart.setHours(h, m, 0, 0);
-    const dur = booking.treatment_menu?.duration_minutes ?? 60;
-    const newEnd = new Date(newStart.getTime() + dur * 60000);
     const label = newStart.toLocaleString('ja-JP', {
       month: 'long', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit',
     });
@@ -74,26 +72,49 @@ export function RescheduleScreen({ route, navigation }: any) {
       `${booking.treatment_menu?.name ?? 'ご予約'}\n変更後: ${label}`,
       [
         { text: 'やめる', style: 'cancel' },
-        { text: 'この日時に変更', onPress: () => save(newStart, newEnd) },
+        { text: 'この日時に変更', onPress: () => save(time) },
       ],
     );
   }
 
-  async function save(start: Date, end: Date) {
+  // 日時変更はEdge関数(customer-reschedule-booking)経由に一本化。
+  // 本人確認・空き枠の再検証・スタッフLINE通知・顧客LINE通知はサーバー側で行う。
+  async function save(time: string) {
+    type RescheduleResult = { ok?: boolean; unchanged?: boolean; code?: string; message?: string; error?: string };
     setSaving(true);
-    const { error } = await supabase
-      .from('app_bookings')
-      .update({ starts_at: start.toISOString(), ends_at: end.toISOString(), updated_at: new Date().toISOString() })
-      .eq('id', bookingId);
-    setSaving(false);
-    if (error) { Alert.alert('エラー', '変更に失敗しました。時間をおいてお試しください。'); return; }
-    // LINE連携済みなら変更通知（非ブロッキング）
     try {
-      await supabase.functions.invoke('send-line-message', {
-        body: { booking_id: bookingId, message_type: 'booking_created' },
+      const { data, error } = await supabase.functions.invoke<RescheduleResult>('customer-reschedule-booking', {
+        body: { bookingId, date: ymd(selectedDate), time },
       });
-    } catch (_e) { /* non-fatal */ }
-    Alert.alert('変更しました', 'ご予約の日時を変更しました。', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+      let code = data?.code;
+      let message = data?.message ?? data?.error;
+      if (error) {
+        // 非2xx時は data が null になるため、レスポンス本文から code / message を取り出す
+        try {
+          const body = await (error as any).context?.json?.();
+          code = body?.code ?? code;
+          message = body?.message ?? body?.error ?? message;
+        } catch (_e) { /* 本文が読めなければ汎用文言にフォールバック */ }
+      }
+      if (error || !data || data.ok !== true) {
+        if (code === 'slot_taken') {
+          Alert.alert(
+            'ごめんなさい',
+            'あと一歩のところでこの枠が埋まってしまいました。お手数ですが、別の時間をお選びいただけますか。',
+            [{ text: 'OK', onPress: () => fetchSlots() }],
+          );
+        } else {
+          Alert.alert(
+            '変更できませんでした',
+            message ?? 'お手数ですが、時間をおいてもう一度お試しください。',
+          );
+        }
+        return;
+      }
+      Alert.alert('変更しました', 'ご予約を変更しました。', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+    } finally {
+      setSaving(false);
+    }
   }
 
   if (loading || !booking) {
