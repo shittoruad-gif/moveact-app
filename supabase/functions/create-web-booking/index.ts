@@ -10,12 +10,23 @@
 //   ・初回は deposit_status='pending', deposit_amount=メニュー価格 で仮押さえ
 //   ・payment_links（Airペイの金額固定リンク）から該当URLを返す
 //
+// 指名メニュー: treatment_menus.required_staff_slug が設定されたメニューは
+//   profiles.booking_slug(role='staff') で解決したスタッフ固定。
+//   クライアントが別の staffId を送ってきたら 400 {code:'invalid'}。
+//
+// 勤務スケジュールゲート（get-available-slots と整合）:
+//   staff_weekly_schedule に店舗の行が1件でもあれば有効化。
+//   当該曜日に行が無いスタッフは候補から除外し、行があるスタッフは
+//   start_time〜end_time の外側を busy 区間として既存の重なり判定に乗せる。
+//   店舗に1行も無ければ従来動作（フォールバック）。
+//
 // 入力(POST): { storeId, menuId, date, time, staffId?, guestName, guestPhone, guestEmail?, request? }
 // 出力: { bookingId, requiresDeposit, depositAmount, paymentUrl } | { error, code }
 // =====================================================
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { sendConfirmationEmail } from '../_shared/email.ts';
+import { createZoomMeeting } from '../_shared/zoom.ts';
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -28,6 +39,7 @@ const MAX_OK_GAP = 30;        // すきま時間ブロック: これ以下のギ
 const MIN_FITTABLE_GAP = 75;  // これ以上ならOK
 const IP_LIMIT_PER_HOUR = 10; // 同一IPの1時間あたり上限
 const PHONE_LIMIT_PER_DAY = 5;// 同一電話の1日あたり上限
+const STORE_LIMIT_PER_HOUR = 30; // 店舗単位: 直近60分のWeb予約作成数の総量キャップ（ヘッダ偽装・電話ローテーション対策）
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function corsFor(origin: string | null) {
@@ -62,10 +74,10 @@ serve(async (req) => {
     const menuId = (b.menuId ?? '').toString();
     const date = (b.date ?? '').toString();
     const time = (b.time ?? '').toString();
-    const staffId = (b.staffId ?? '').toString() || null;
+    let staffId = (b.staffId ?? '').toString() || null;
     const guestName = (b.guestName ?? '').toString().trim();
     const guestPhone = (b.guestPhone ?? '').toString().trim();
-    const guestEmail = (b.guestEmail ?? '').toString().trim() || null;
+    const guestEmail = (b.guestEmail ?? '').toString().trim();
     const request = (b.request ?? '').toString().trim().slice(0, 1000) || null;
 
     // --- 入力検証 ---
@@ -87,8 +99,8 @@ serve(async (req) => {
     if (phoneNorm.length < 10 || phoneNorm.length > 11) {
       return json({ error: '電話番号を正しく入力してください', code: 'invalid' }, 400);
     }
-    if (guestEmail && !EMAIL_RE.test(guestEmail)) {
-      return json({ error: 'メールアドレスの形式が正しくありません', code: 'invalid' }, 400);
+    if (!guestEmail || !EMAIL_RE.test(guestEmail)) {
+      return json({ error: 'メールアドレスを正しく入力してください', code: 'invalid' }, 400);
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
@@ -96,16 +108,43 @@ serve(async (req) => {
     // --- 期限切れの仮押さえ（未払い）を先に解放（pg_cron不在時の保険・枠を正しく開ける）---
     await supabase.rpc('cancel_expired_deposit_holds').then(() => {}, () => {});
 
-    // --- レート制限（IP / 電話）---
-    const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'unknown';
+    // --- レート制限（IP / 電話 / 店舗総量）---
+    // IP取得はヘッダ偽装耐性の高い順に採用する（優先順位）:
+    //   1) cf-connecting-ip … Supabase Edge(Cloudflare配下)がエッジで上書き付与する接続元IP。
+    //      クライアントが同名ヘッダを送っても信頼プロキシが差し替えるため偽装不可。最優先。
+    //   2) x-forwarded-for の「末尾」… 各ホップが自分の見た接続元を末尾に追記する仕様のため、
+    //      末尾側ほど最後のホップ（信頼プロキシ）が付けた値。先頭はクライアントが自由に
+    //      偽装できるので使わない（従来の先頭採用から変更）。
+    //   3) x-real-ip … 一部プロキシが付与する補助ヘッダ。上記2つが無い場合のみ。
+    //   いずれも取れなければ 'unknown'（unknown同士で共通の制限を受けるのは許容）。
+    const pickClientIp = (): string => {
+      const cf = (req.headers.get('cf-connecting-ip') ?? '').trim();
+      if (cf) return cf;
+      const xffParts = (req.headers.get('x-forwarded-for') ?? '')
+        .split(',').map((s) => s.trim()).filter(Boolean);
+      if (xffParts.length > 0) return xffParts[xffParts.length - 1];
+      const real = (req.headers.get('x-real-ip') ?? '').trim();
+      if (real) return real;
+      return 'unknown';
+    };
+    const ip = pickClientIp();
     const since1h = new Date(Date.now() - 3600_000).toISOString();
     const since24h = new Date(Date.now() - 86_400_000).toISOString();
-    const [{ count: ipCount }, { count: phoneCount }] = await Promise.all([
+    const [{ count: ipCount }, { count: phoneCount }, { count: storeHourCount }] = await Promise.all([
       supabase.from('web_booking_rate_limit').select('id', { count: 'exact', head: true })
         .eq('ip', ip).gte('created_at', since1h),
       supabase.from('web_booking_rate_limit').select('id', { count: 'exact', head: true })
         .eq('phone_norm', phoneNorm).gte('created_at', since24h),
+      // 店舗単位の総量キャップ: ヘッダ偽装や電話番号ローテーションでIP/電話の個別制限を
+      // すり抜けられても、この店舗で直近60分に「作成された」Web予約(source='web')の総数で
+      // 止める最後の砦。status は問わない（キャンセル済みも作成実績として数える）。
+      // 判定は created_at（作成時刻）ベース。
+      supabase.from('app_bookings').select('id', { count: 'exact', head: true })
+        .eq('store_id', storeId).eq('source', 'web').gte('created_at', since1h),
     ]);
+    if ((storeHourCount ?? 0) >= STORE_LIMIT_PER_HOUR) {
+      return json({ error: '現在アクセスが集中しています。しばらくしてからお試しください', code: 'rate_limited' }, 429);
+    }
     if ((ipCount ?? 0) >= IP_LIMIT_PER_HOUR || (phoneCount ?? 0) >= PHONE_LIMIT_PER_DAY) {
       return json({ error: 'ご予約の回数が上限に達しました。しばらくしてからお試しください。', code: 'rate_limited' }, 429);
     }
@@ -115,9 +154,11 @@ serve(async (req) => {
 
     // --- メニュー ---
     const { data: menu } = await supabase
-      .from('treatment_menus').select('duration_minutes, name, price').eq('id', menuId).eq('is_active', true).single();
+      .from('treatment_menus').select('duration_minutes, name, price, required_staff_slug, treatment_type')
+      .eq('id', menuId).eq('is_active', true).single();
     if (!menu) return json({ error: 'メニューが見つかりません', code: 'invalid' }, 404);
     const duration = menu.duration_minutes as number;
+    const treatmentType = (menu as { treatment_type?: string }).treatment_type ?? null;
 
     // --- 店舗で提供されているメニューか ---
     const { data: stm } = await supabase
@@ -125,8 +166,28 @@ serve(async (req) => {
       .select('store_id').eq('store_id', storeId).eq('treatment_menu_id', menuId).eq('is_available', true).maybeSingle();
     if (!stm) return json({ error: 'この店舗では受付できないメニューです', code: 'invalid' }, 400);
 
+    // --- 指名メニュー（required_staff_slug）---
+    //   設定されている場合は profiles.booking_slug でスタッフを解決し、そのスタッフ固定の
+    //   指名予約として扱う（is_staff_nominated=true）。別の staffId 指定は 400。
+    const requiredSlug = (menu.required_staff_slug as string | null) ?? null;
+    if (requiredSlug) {
+      const { data: reqStaff, error: reqErr } = await supabase
+        .from('profiles').select('id')
+        .eq('booking_slug', requiredSlug).eq('role', 'staff').single();
+      if (reqErr || !reqStaff) {
+        console.error('required_staff_slug unresolved:', requiredSlug, reqErr?.message ?? 'no row');
+        return json({ error: 'このメニューは現在受付できません', code: 'invalid' }, 400);
+      }
+      if (staffId && staffId !== reqStaff.id) {
+        return json({ error: 'このメニューは担当固定です', code: 'invalid' }, 400);
+      }
+      staffId = reqStaff.id as string;
+    }
+
     // --- 営業時間 / 休業日 ---
-    const dow = new Date(`${date}T00:00:00+09:00`).getDay();
+    // 曜日はサーバーローカルTZ(Supabase EdgeはUTC)に依存させないため、
+    // 既に解析済みの yy/mm/dd から UTC で曜日を求める（+09:00文字列のgetDay()は日ズレの恐れ）。
+    const dow = new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay();
     const { data: closed } = await supabase
       .from('store_closed_days').select('*').eq('store_id', storeId).eq('date', date).maybeSingle();
     let openMin: number | null = null, closeMin: number | null = null;
@@ -155,19 +216,49 @@ serve(async (req) => {
     if (nowJst >= 0 && nowJst <= 1440 && slotStart <= nowJst) {
       return json({ error: '過去の時刻は予約できません', code: 'slot_taken' }, 409);
     }
-    // 受付は本日〜180日先まで
-    if (base - new Date().setHours(0, 0, 0, 0) > 200 * 86_400_000) {
+    // 上記は当日枠のみ対象。直接POSTで過去日を渡された場合に備え、
+    // スロット開始の絶対時刻(JST基準のbase + slotStart分)が未来でなければ無条件で拒否する。
+    const startEpoch = base + slotStart * 60000;
+    if (startEpoch <= Date.now()) {
+      return json({ error: '過去の時刻は予約できません', code: 'slot_taken' }, 409);
+    }
+    // 受付は本日〜180日先まで（JSTの今日0時起点で判定）。
+    const jstTodayMidnight = (() => {
+      const now = new Date();
+      const jstNow = new Date(now.getTime() + 9 * 3600_000);
+      return Date.UTC(jstNow.getUTCFullYear(), jstNow.getUTCMonth(), jstNow.getUTCDate()) - 9 * 3600_000;
+    })();
+    if (base - jstTodayMidnight > 180 * 86_400_000) {
       return json({ error: '予約できる期間を超えています', code: 'invalid' }, 400);
     }
 
     // --- ロスター ---
+    //   ロスター未設定の全スタッフフォールバックは廃止（get-available-slots と整合）。
+    //   未設定＝受付できない設定ミスとして扱い、slot_taken で閉じる。
     const { data: roster } = await supabase
       .from('staff_stores').select('staff_id').eq('store_id', storeId).eq('is_active', true);
     let staffIds: string[] = (roster ?? []).map((r: { staff_id: string }) => r.staff_id);
     if (staffIds.length === 0) {
-      const { data: allStaff } = await supabase.from('profiles').select('id').in('role', ['staff', 'admin']);
-      staffIds = (allStaff ?? []).map((r: { id: string }) => r.id);
+      console.error('staff roster empty for store:', storeId);
+      return json({ error: 'この枠は埋まってしまいました。別の時間をお選びください。', code: 'slot_taken' }, 409);
     }
+
+    // --- スキル(施術種別)フィルタ ---
+    //   メニューの施術種別を担当できるスタッフだけを候補に残す。
+    //   指名メニュー(required_staff_slug)はその担当が施術可能な前提のためスキップ。
+    if (treatmentType && !requiredSlug) {
+      const { data: skillRows } = await supabase
+        .from('staff_skills').select('staff_id').eq('treatment_type', treatmentType);
+      const skilled = new Set((skillRows ?? []).map((r: { staff_id: string }) => r.staff_id));
+      if (staffId && !skilled.has(staffId)) {
+        return json({ error: 'ご指名の担当者はこのメニューを承っておりません', code: 'invalid' }, 400);
+      }
+      staffIds = staffIds.filter((id) => skilled.has(id));
+      if (staffIds.length === 0) {
+        return json({ error: 'この枠は埋まってしまいました。別の時間をお選びください。', code: 'slot_taken' }, 409);
+      }
+    }
+
     if (staffId) {
       if (!staffIds.includes(staffId)) {
         return json({ error: '指名スタッフはこの店舗で受付していません', code: 'invalid' }, 400);
@@ -175,19 +266,53 @@ serve(async (req) => {
       staffIds = [staffId];
     }
 
-    // --- 当日の予約・ブロック ---
+    // --- 当日の予約・ブロック＋週間勤務スケジュール ---
     const dayStart = `${date}T00:00:00+09:00`;
     const dayEnd = `${date}T23:59:59+09:00`;
-    const [{ data: bookings }, { data: unavail }] = await Promise.all([
+    const [{ data: bookings }, { data: unavail }, { data: airEvents }, { data: weeklyRows }] = await Promise.all([
       supabase.from('app_bookings')
         .select('staff_id, starts_at, ends_at, buffer_before, buffer_after')
         .eq('store_id', storeId).neq('status', 'cancelled')
         .gte('starts_at', dayStart).lte('starts_at', dayEnd),
       supabase.from('staff_unavailability')
-        .select('staff_id, starts_at, ends_at')
+        .select('staff_id, starts_at, ends_at, block_type')
         .eq('store_id', storeId)
         .lte('starts_at', dayEnd).gte('ends_at', dayStart),
+      // AirReserve外部予約(migration 018)も空き判定を塞ぐ。同日ウィンドウで取得。
+      // summary は「予定」「入れ替え時間」等の内部ブロック判別に使う（店舗占有から除外）
+      supabase.from('airreserve_events')
+        .select('staff_id, starts_at, ends_at, summary')
+        .eq('store_id', storeId)
+        .lte('starts_at', dayEnd).gte('ends_at', dayStart),
+      // 週間勤務スケジュール（店舗の全行）。1行でもあればゲート有効。
+      supabase.from('staff_weekly_schedule')
+        .select('staff_id, day_of_week, start_time, end_time')
+        .eq('store_id', storeId),
     ]);
+    // グループレッスン: 開催中は店舗全体を占有（キャパ1のため個別予約を受けない）
+    const { data: groupLessons } = await supabase.from('group_lessons')
+      .select('starts_at, ends_at')
+      .eq('store_id', storeId)
+      .eq('is_cancelled', false)
+      .lte('starts_at', dayEnd).gte('ends_at', dayStart);
+
+    // --- 勤務スケジュールゲート（get-available-slots と整合）---
+    //   店舗に行が1件でもあれば有効化。当該曜日に行が無いスタッフは候補から除外。
+    //   行があるスタッフの勤務時間窓は、後段で「窓の外側= busy 区間」として合算する。
+    const scheduleActive = (weeklyRows ?? []).length > 0;
+    const workWindow = new Map<string, { start: number; end: number }>();
+    if (scheduleActive) {
+      for (const w of (weeklyRows ?? [])) {
+        if (w.day_of_week === dow) {
+          workWindow.set(w.staff_id as string, { start: toMin(w.start_time), end: toMin(w.end_time) });
+        }
+      }
+      staffIds = staffIds.filter((id) => workWindow.has(id));
+      if (staffIds.length === 0) {
+        // 指名スタッフがその曜日に勤務しない／その曜日の出勤者がいない
+        return json({ error: 'この時間はご案内できません。別の時間をお選びください。', code: 'slot_taken' }, 409);
+      }
+    }
 
     const jstMin = (iso: string) => Math.round((new Date(iso).getTime() - base) / 60000);
     const bufStart = slotStart - BUFFER, bufEnd = slotEnd + BUFFER;
@@ -204,6 +329,70 @@ serve(async (req) => {
     for (const u of (unavail ?? [])) {
       if (u.staff_id && staffIds.includes(u.staff_id)) ensure(u.staff_id).push({ start: jstMin(u.starts_at), end: jstMin(u.ends_at) });
     }
+    // AirReserve外部予約: 同一スタッフのapp_bookingと同じ扱い。
+    //   staff_id が設定され有効スタッフなら、そのスタッフをBUFFER付きで占有。
+    //   staff_id 無しはどのスタッフか特定できないため未割当予約として空きを1人消費。
+    //   すきま時間ロジック用に、素の区間もrealBusyへ足す。
+    for (const ev of (airEvents ?? [])) {
+      const s = jstMin(ev.starts_at), e = jstMin(ev.ends_at);
+      if (ev.staff_id && staffIds.includes(ev.staff_id)) {
+        ensure(ev.staff_id).push({ start: s - BUFFER, end: e + BUFFER });
+      } else if (!ev.staff_id) {
+        unassigned.push({ start: s - BUFFER, end: e + BUFFER });
+      }
+    }
+    // 勤務スケジュールゲート: 勤務時間窓の外側を busy 区間として合算し、
+    // 既存の重なり判定（バッファ込み）にそのまま乗せる（get-available-slots と同一）。
+    if (scheduleActive) {
+      for (const id of staffIds) {
+        const w = workWindow.get(id)!;
+        // 番兵はBUFFER分外側へシフト（get-available-slotsと同一式）。
+        // 判定側が bufStart/bufEnd(±15分)で重なりを見るため、シフトしないと
+        // シフト先頭/末尾ちょうどの枠（09:00開始・21:00終了・三上の06:30等）が
+        // 「グリッドには出るのに予約すると409」になる。
+        ensure(id).push({ start: -100000, end: w.start - BUFFER });
+        ensure(id).push({ start: w.end + BUFFER, end: 100000 });
+      }
+    }
+
+    // --- 店舗キャパシティ = 同時1件（2026-07-15 オーナー決定）---
+    //   担当スタッフに関わらず、店舗内にお客様のご予約が1件でもあれば不可。
+    //   「入れ替え時間」（AirReserve取込・管理画面登録とも）も店舗全体を塞ぐ。
+    //   「予定」は当該スタッフのみ＝他スタッフの予約と重なってOK。
+    //   get-available-slots の表示判定と同一ソース・同一バッファで揃える。
+    //   （最後の砦としてDB制約 one_booking_per_store_at_a_time も併設・migration 111）
+    //   ※30分以上の「入れ替え時間」は「予定」と同じスタッフのみ扱い
+    //     （オーナー指示 2026-07-15。migration 113でデータ側も変換済み）。
+    const STAFF_ONLY_AIR_BLOCKS = ['予定'];
+    const AIR_CHANGEOVER = '入れ替え時間';
+    const CHANGEOVER_STORE_BLOCK_UNDER_MIN = 30;   // これ未満の入れ替えのみ店舗全体を塞ぐ
+    const storeBusy: Busy[] = [];
+    for (const bk of (bookings ?? [])) {
+      storeBusy.push({ start: jstMin(bk.starts_at) - (bk.buffer_before ?? BUFFER), end: jstMin(bk.ends_at) + (bk.buffer_after ?? BUFFER) });
+    }
+    for (const ev of (airEvents ?? [])) {
+      const sm = ((ev as { summary?: string | null }).summary ?? '').trim();
+      if (STAFF_ONLY_AIR_BLOCKS.includes(sm)) continue;
+      const s = jstMin(ev.starts_at), e = jstMin(ev.ends_at);
+      if (sm === AIR_CHANGEOVER) {
+        if (e - s < CHANGEOVER_STORE_BLOCK_UNDER_MIN) storeBusy.push({ start: s, end: e });   // 区間そのものがバッファ＝追加なし
+      } else {
+        storeBusy.push({ start: s - BUFFER, end: e + BUFFER });
+      }
+    }
+    // 管理画面から登録された「入れ替え時間」(block_type='changeover')も同じ30分ルール
+    for (const u of (unavail ?? [])) {
+      if ((u as { block_type?: string | null }).block_type === 'changeover') {
+        const s = jstMin(u.starts_at), e = jstMin(u.ends_at);
+        if (e - s < CHANGEOVER_STORE_BLOCK_UNDER_MIN) storeBusy.push({ start: s, end: e });
+      }
+    }
+    for (const gl of (groupLessons ?? [])) {
+      storeBusy.push({ start: jstMin(gl.starts_at) - BUFFER, end: jstMin(gl.ends_at) + BUFFER });
+    }
+    if (storeBusy.some((x) => bufStart < x.end && bufEnd > x.start)) {
+      return json({ error: 'この枠は埋まってしまいました。別の時間をお選びください。', code: 'slot_taken' }, 409);
+    }
 
     // --- 空きスタッフを特定 ---
     const freeStaffIds = staffIds.filter((id) => {
@@ -217,48 +406,88 @@ serve(async (req) => {
       return json({ error: 'この枠は埋まってしまいました。別の時間をお選びください。', code: 'slot_taken' }, 409);
     }
 
-    // --- すきま時間ブロック（get-available-slots と整合）---
-    const realBusy = (bookings ?? []).map((bk) => ({ start: jstMin(bk.starts_at), end: jstMin(bk.ends_at) }));
-    let beforeEnd = -Infinity, afterStart = Infinity;
-    for (const x of realBusy) {
-      if (x.end <= slotStart && x.end > beforeEnd) beforeEnd = x.end;
-      if (x.start >= slotEnd && x.start < afterStart) afterStart = x.start;
+    // --- すきま時間ブロック（get-available-slots のスタッフ別判定と同一）---
+    //   「そのスタッフ自身の」実予約(app_bookings)＋AirReserve外部予約（素の区間）
+    //   ＋担当未定の予約（店舗共有）だけを見て中途半端な空き(31〜74分)を弾く。
+    //   店舗横断で合算すると、他スタッフの予約が作る隙間で
+    //   本来空いているスタッフの枠まで409になってしまう（グリッドとの不一致）。
+    const realBusyByStaff = new Map<string, Busy[]>();
+    const ensureReal = (id: string) => { if (!realBusyByStaff.has(id)) realBusyByStaff.set(id, []); return realBusyByStaff.get(id)!; };
+    const unassignedReal: Busy[] = [];
+    for (const bk of (bookings ?? [])) {
+      const iv = { start: jstMin(bk.starts_at), end: jstMin(bk.ends_at) };
+      if (bk.staff_id && staffIds.includes(bk.staff_id)) ensureReal(bk.staff_id).push(iv);
+      else if (!bk.staff_id) unassignedReal.push(iv);
     }
-    if (beforeEnd !== -Infinity) {
-      const g = slotStart - beforeEnd;
-      if (g > MAX_OK_GAP && g < MIN_FITTABLE_GAP) return json({ error: 'この時間はご案内できません。別の時間をお選びください。', code: 'slot_taken' }, 409);
+    for (const ev of (airEvents ?? [])) {
+      const iv = { start: jstMin(ev.starts_at), end: jstMin(ev.ends_at) };
+      if (ev.staff_id && staffIds.includes(ev.staff_id)) ensureReal(ev.staff_id).push(iv);
+      else if (!ev.staff_id) unassignedReal.push(iv);
     }
-    if (afterStart !== Infinity) {
-      const g = afterStart - slotEnd;
-      if (g > MAX_OK_GAP && g < MIN_FITTABLE_GAP) return json({ error: 'この時間はご案内できません。別の時間をお選びください。', code: 'slot_taken' }, 409);
+    const hasAwkwardGap = (id: string): boolean => {
+      const own = [...(realBusyByStaff.get(id) ?? []), ...unassignedReal];
+      let beforeEnd = -Infinity, afterStart = Infinity;
+      for (const x of own) {
+        if (x.end <= slotStart && x.end > beforeEnd) beforeEnd = x.end;
+        if (x.start >= slotEnd && x.start < afterStart) afterStart = x.start;
+      }
+      if (beforeEnd !== -Infinity) {
+        const g = slotStart - beforeEnd;
+        if (g > MAX_OK_GAP && g < MIN_FITTABLE_GAP) return true;
+      }
+      if (afterStart !== Infinity) {
+        const g = afterStart - slotEnd;
+        if (g > MAX_OK_GAP && g < MIN_FITTABLE_GAP) return true;
+      }
+      return false;
+    };
+    // すきま時間を作らないスタッフのみ割当可能（1人も居なければグリッド同様この枠は不可）
+    const assignableStaff = freeStaffIds.filter((id) => !hasAwkwardGap(id));
+    if (assignableStaff.length === 0) {
+      return json({ error: 'この時間はご案内できません。別の時間をお選びください。', code: 'slot_taken' }, 409);
     }
 
-    const assignedStaff = staffId ?? freeStaffIds[0];
+    const assignedStaff = staffId ?? assignableStaff[0];
     const isNominated = !!staffId;
 
     // --- 初回判定（電話/メールで過去予約・会員を照合）---
+    //   注意: 自分自身の未払い仮押さえ(deposit_status='pending')を「過去予約」と数えると、
+    //   初回客の2回目の予約が「再来店」扱いになり前金ゲートを素通りしてしまう。
+    //   よって pending の仮押さえは初回判定から除外する（本当の来店=confirmed/completed かつ
+    //   deposit_status が none/paid/waived のもののみを来店実績とみなす）。
     let isFirstVisit = true;
     const { count: priorBookings } = await supabase
       .from('app_bookings').select('id', { count: 'exact', head: true })
-      .eq('guest_phone_norm', phoneNorm).neq('status', 'cancelled');
+      .eq('guest_phone_norm', phoneNorm).neq('status', 'cancelled')
+      .neq('deposit_status', 'pending');
     if ((priorBookings ?? 0) > 0) isFirstVisit = false;
     if (isFirstVisit) {
-      // 会員(アプリ登録)の電話とも照合
-      const { data: prof } = await supabase
-        .from('profiles').select('id').eq('phone', guestPhone).limit(1).maybeSingle();
-      if (prof) isFirstVisit = false;
+      // 会員(アプリ登録)の電話とも照合。
+      //   profiles.phone はフリー入力でハイフン等を含むことがあるため、生値比較だと
+      //   ハイフン無しで入力した再来店会員を取りこぼす。両辺を数字のみに正規化して比較する。
+      const { data: profs } = await supabase
+        .from('profiles').select('id, phone').not('phone', 'is', null);
+      const matched = (profs ?? []).some(
+        (p: { phone: string | null }) => (p.phone ?? '').replace(/\D/g, '') === phoneNorm
+      );
+      if (matched) isFirstVisit = false;
     }
 
     // --- 前金（初回のみ）---
     //   通常: 前金=メニュー価格（初回対象メニューは3,980/5,980想定。自動案内はその金額のみ）。
     //   学割: 学生選択時はメニュー価格に対応する学割価格で請求（下記の対応表）。
     const isStudent = b.isStudent === true;
+    // 学割対応表: 初回対象メニュー価格→学割前金（migrations 080/081/082 と一致させる）。
     const STUDENT_DEPOSIT: Record<number, number> = { 3980: 3500, 5980: 4400 };
     const depositRequired = isFirstVisit;
     const menuPrice = menu.price as number;
+    // 学割指定なのに対応表に無いメニュー価格なら、黙って通常価格を請求せず明示的にエラー。
+    if (depositRequired && isStudent && !(menuPrice in STUDENT_DEPOSIT)) {
+      return json({ error: 'このメニューは学割対象外です', code: 'invalid' }, 400);
+    }
     let depositAmount: number | null = null;
     if (depositRequired) {
-      depositAmount = isStudent ? (STUDENT_DEPOSIT[menuPrice] ?? menuPrice) : menuPrice;
+      depositAmount = isStudent ? STUDENT_DEPOSIT[menuPrice] : menuPrice;
     }
     const depositStatus = depositRequired ? 'pending' : 'none';
 
@@ -269,15 +498,19 @@ serve(async (req) => {
     let paymentUrl: string | null = null;
     if (depositRequired && depositAmount) {
       let q = supabase
-        .from('payment_links').select('url')
+        .from('payment_links').select('url, store_id')
         .eq('is_active', true).eq('amount', depositAmount)
         .eq('is_subscription', false);   // 定期(サブスク)リンクは前金照合の対象外（毎月課金への誤登録防止）
       q = isStudent ? q.eq('is_student', true) : q.eq('auto_match', true);
-      const { data: link } = await q
+      // 店舗別リンクとグローバル(null)リンクの両方を取得し、決定的に選ぶ:
+      //   1) 店舗一致を最優先、2) 無ければグローバル。重複時は created_at 新しい順で安定化。
+      const { data: links } = await q
         .or(`store_id.eq.${storeId},store_id.is.null`)
-        .order('store_id', { ascending: true, nullsFirst: false })
-        .limit(1).maybeSingle();
-      paymentUrl = link?.url ?? null;
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true });
+      const chosen = (links ?? []).find((l) => l.store_id === storeId)
+        ?? (links ?? []).find((l) => l.store_id === null);
+      paymentUrl = chosen?.url ?? null;
     }
     // 仮押さえの失効期限: オンライン決済導線(リンク)がある時のみ設定（既定30分）。
     //   期限内に「お支払いが完了しました」が押されないと自動キャンセルで枠を解放する。
@@ -317,7 +550,7 @@ serve(async (req) => {
         deposit_amount: depositAmount,
         hold_expires_at: holdExpiresAt,
       })
-      .select('id')
+      .select('id, cancel_token')
       .single();
 
     if (insErr) {
@@ -334,7 +567,32 @@ serve(async (req) => {
     //   決済完了の自己申告（confirm-web-booking）時に通知する。
     //   再来店客（前金不要）は即確定なので、従来どおりここで通知する。
     const heldForPayment = depositRequired && !!holdExpiresAt;
+    let zoomJoinUrl: string | null = null;
     if (!heldForPayment) {
+      // --- Zoom会議の自動作成（zoom_user_id を設定したスタッフの予約のみ）---
+      //   通知・メールの前に作成し、URLを予約に保存してから通知する。
+      //   失敗してもZoom無しで確定（予約は止めない）。
+      try {
+        const { data: staffProf } = await supabase
+          .from('profiles').select('zoom_user_id').eq('id', assignedStaff).maybeSingle();
+        if (staffProf?.zoom_user_id) {
+          const m = await createZoomMeeting({
+            hostUserId: staffProf.zoom_user_id,
+            topic: `${menu.name}（${guestName}様）`,
+            startIso: startsAt,
+            durationMin: duration,
+          });
+          if (m) {
+            zoomJoinUrl = m.joinUrl;
+            await supabase.from('app_bookings')
+              .update({ zoom_join_url: m.joinUrl, zoom_meeting_id: m.id })
+              .eq('id', inserted!.id);
+          }
+        }
+      } catch (e) {
+        console.error('zoom create failed:', (e as Error).message);
+      }
+
       try {
         await fetch(`${supabaseUrl}/functions/v1/notify-staff-group`, {
           method: 'POST',
@@ -355,12 +613,29 @@ serve(async (req) => {
           menuName: menu.name as string,
           durationMinutes: duration,
           storeId,
+          cancelToken: inserted!.cancel_token ?? undefined,
+          zoomUrl: zoomJoinUrl ?? undefined,
         }).then(() =>
           supabase.from('app_bookings')
             .update({ confirmation_email_sent_at: new Date().toISOString() })
             .eq('id', inserted!.id).then(() => {})
-        ).catch(() => {});
+        ).catch((e) => console.error('confirmation email failed:', (e as Error).message));
         void jstBase; // suppress unused warning
+      }
+    } else {
+      // 前金ゲートあり（初回・事前決済待ち）でも作成時点でスタッフに通知する。
+      // 通知文には「💳 要事前決済（入金待ち）」が自動で付くため状況が分かる。
+      // ※以前は決済確定(confirm-web-booking)時のみ通知だったが、支払い済みでも
+      //   完了ボタン未押下だと通知ゼロのまま自動キャンセルされ、店側が予約の存在に
+      //   気づけない事故が起きた（2026-07-15）。
+      try {
+        await fetch(`${supabaseUrl}/functions/v1/notify-staff-group`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${serviceKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bookingId: inserted!.id }),
+        });
+      } catch (e) {
+        console.error('notify-staff-group (held) failed:', (e as Error).message);
       }
     }
 
@@ -370,6 +645,7 @@ serve(async (req) => {
       depositAmount,
       paymentUrl,
       holdExpiresAt,
+      zoomJoinUrl,
     });
   } catch (e) {
     console.error('create-web-booking error:', (e as Error).message);

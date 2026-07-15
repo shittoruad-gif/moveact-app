@@ -10,7 +10,6 @@ import { supabase } from '../lib/supabase';
 // ─────────────────────────────────────────────────────────────
 
 type StoreId = 'tamashima' | 'kanamitsu';
-const STORE_ORDER: StoreId[] = ['tamashima', 'kanamitsu'];
 const STORE_NAMES: Record<StoreId, string> = { tamashima: '玉島店', kanamitsu: '金光店' };
 
 // グリッド寸法
@@ -80,6 +79,14 @@ interface AirReserveRow {
   ends_at: string;
   summary: string | null;
 }
+// 週間勤務スケジュール（シフト外グレー表示用。AirReserveのグレーと同じ見え方にする）
+interface WeeklyShiftRow {
+  staff_id: string;
+  store_id: string;
+  day_of_week: number;
+  start_time: string;   // 'HH:MM:SS'
+  end_time: string;
+}
 
 // スタッフ列（未割当を含む）
 interface Column {
@@ -146,13 +153,20 @@ function bookingVisual(b: BookingRow): { color: string; label: string } {
 export function Timeline() {
   const todayDate = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
   const [date, setDate] = useState<Date>(todayDate);
-  const [storeFilter, setStoreFilter] = useState<StoreId | 'all'>('all');
+  // 店舗は常に1店舗のみ表示（両店同時表示は見にくいため廃止・2026-07-15オーナー要望）。
+  // 前回選んだ店舗を記憶して次回もその店舗から開く。
+  const [storeFilter, setStoreFilter] = useState<StoreId>(() => {
+    const saved = localStorage.getItem('timeline.store');
+    return saved === 'kanamitsu' || saved === 'tamashima' ? saved : 'tamashima';
+  });
+  useEffect(() => { localStorage.setItem('timeline.store', storeFilter); }, [storeFilter]);
 
   const [roster, setRoster] = useState<RosterRow[]>([]);
   const [hours, setHours] = useState<BusinessHoursRow[]>([]);
   const [closedDays, setClosedDays] = useState<ClosedDayRow[]>([]);
   const [bookings, setBookings] = useState<BookingRow[]>([]);
   const [unavail, setUnavail] = useState<UnavailRow[]>([]);
+  const [weeklyShifts, setWeeklyShifts] = useState<WeeklyShiftRow[]>([]);
   // 取得エラーは必ず画面に出す（握りつぶすと「予約0件」と区別できず事故になる）
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [airEvents, setAirEvents] = useState<AirReserveRow[]>([]);
@@ -184,15 +198,15 @@ export function Timeline() {
     const lo = `${dayStr}T00:00:00+09:00`;
     const hi = `${dayStr}T23:59:59+09:00`;
 
-    // スタッフ列クエリ（store_idでフィルタする場合のみ絞る。allは両店分）
+    // スタッフ列クエリ（選択中の1店舗のみ）
     let rosterQ = supabase.from('public_staff_roster').select('staff_id, full_name, store_id');
-    if (storeFilter !== 'all') rosterQ = rosterQ.eq('store_id', storeFilter);
+    rosterQ = rosterQ.eq('store_id', storeFilter);
 
     let hoursQ = supabase
       .from('store_business_hours')
       .select('store_id, day_of_week, open_time, close_time, is_closed')
       .eq('day_of_week', dow);
-    if (storeFilter !== 'all') hoursQ = hoursQ.eq('store_id', storeFilter);
+    hoursQ = hoursQ.eq('store_id', storeFilter);
 
     let closedQ = supabase
       .from('store_closed_days')
@@ -210,14 +224,14 @@ export function Timeline() {
       .gte('starts_at', lo)
       .lte('starts_at', hi)
       .order('starts_at');
-    if (storeFilter !== 'all') bookingsQ = bookingsQ.eq('store_id', storeFilter);
+    bookingsQ = bookingsQ.eq('store_id', storeFilter);
 
     let unavailQ = supabase
       .from('staff_unavailability')
       .select('staff_id, store_id, starts_at, ends_at, reason, block_type')
       .gte('starts_at', lo)
       .lte('starts_at', hi);
-    if (storeFilter !== 'all') unavailQ = unavailQ.eq('store_id', storeFilter);
+    unavailQ = unavailQ.eq('store_id', storeFilter);
 
     // AirReserve取込予約（読み取り専用。二重予約防止のため表示必須）
     let airQ = supabase
@@ -226,12 +240,18 @@ export function Timeline() {
       .gte('starts_at', lo)
       .lte('starts_at', hi)
       .order('starts_at');
-    if (storeFilter !== 'all') airQ = airQ.eq('store_id', storeFilter);
+    airQ = airQ.eq('store_id', storeFilter);
 
-    const [r, h, c, b, u, a] = await Promise.all([rosterQ, hoursQ, closedQ, bookingsQ, unavailQ, airQ]);
+    // 週間勤務スケジュール（シフト外のグレー表示用。店舗の全曜日分を取得して当日分を使う）
+    const weeklyQ = supabase
+      .from('staff_weekly_schedule')
+      .select('staff_id, store_id, day_of_week, start_time, end_time')
+      .eq('store_id', storeFilter);
+
+    const [r, h, c, b, u, a, w] = await Promise.all([rosterQ, hoursQ, closedQ, bookingsQ, unavailQ, airQ, weeklyQ]);
 
     // どれか1つでも失敗したら明示（0件表示と混同させない）
-    const firstErr = r.error ?? h.error ?? c.error ?? b.error ?? u.error ?? a.error;
+    const firstErr = r.error ?? h.error ?? c.error ?? b.error ?? u.error ?? a.error ?? w.error;
     setLoadErr(firstErr
       ? `予約データの取得に失敗しました。表示が0件でも実際には予約が入っている可能性があります。再読み込みしても直らない場合は管理者へ連絡してください。（詳細: ${firstErr.message}）`
       : null);
@@ -250,6 +270,7 @@ export function Timeline() {
     setBookings((b.data as unknown as BookingRow[]) ?? []);
     setUnavail((u.data as UnavailRow[]) ?? []);
     setAirEvents(airRows);
+    setWeeklyShifts((w.data as WeeklyShiftRow[]) ?? []);
     setLoading(false);
   }, [dayStr, dow, storeFilter]);
 
@@ -264,7 +285,7 @@ export function Timeline() {
 
   // 描画対象の店舗
   const storesToRender: StoreId[] =
-    storeFilter === 'all' ? STORE_ORDER : [storeFilter];
+    [storeFilter];
 
   return (
     <div className="page">
@@ -281,13 +302,13 @@ export function Timeline() {
       {/* 店舗切替 */}
       <div className="toolbar" style={{ marginBottom: 16, flexWrap: 'wrap' }}>
         <div className="seg" title="表示する店舗を切り替えます">
-          {(['all', 'tamashima', 'kanamitsu'] as const).map(s => (
+          {(['tamashima', 'kanamitsu'] as const).map(s => (
             <button
               key={s}
               type="button"
               className={`seg-btn${storeFilter === s ? ' seg-btn--active' : ''}`}
               onClick={() => setStoreFilter(s)}
-            >{s === 'all' ? '全店' : STORE_NAMES[s as StoreId]}</button>
+            >{STORE_NAMES[s as StoreId]}</button>
           ))}
         </div>
       </div>
@@ -334,13 +355,14 @@ export function Timeline() {
           <StoreBoard
             key={store}
             store={store}
-            showStoreLabel={storeFilter === 'all'}
+            showStoreLabel={false}
             roster={roster}
             hours={hours}
             closedDays={closedDays}
             bookings={bookings}
             unavail={unavail}
             airEvents={airEvents}
+            weeklyShifts={weeklyShifts}
             dow={dow}
             isToday={isToday}
             nowMin={nowMin}
@@ -369,7 +391,7 @@ export function Timeline() {
 // 店舗ごとのボード
 // ─────────────────────────────────────────────────────────────
 function StoreBoard({
-  store, showStoreLabel, roster, hours, closedDays, bookings, unavail, airEvents, dow, isToday, nowMin, dayStr, onBookingClick,
+  store, showStoreLabel, roster, hours, closedDays, bookings, unavail, airEvents, weeklyShifts, dow, isToday, nowMin, dayStr, onBookingClick,
 }: {
   store: StoreId;
   showStoreLabel: boolean;
@@ -379,6 +401,7 @@ function StoreBoard({
   bookings: BookingRow[];
   unavail: UnavailRow[];
   airEvents: AirReserveRow[];
+  weeklyShifts: WeeklyShiftRow[];
   dow: number;
   isToday: boolean;
   nowMin: number;
@@ -436,6 +459,28 @@ function StoreBoard({
   const storeBookings = bookings.filter(b => b.store_id === store);
   const storeUnavail = unavail.filter(u => u.store_id === store);
   const storeAir = airEvents.filter(a => a.store_id === store);
+
+  // シフト外グレー（AirReserveのグレーと同じ見え方）:
+  //   店舗にスケジュール行が1件でもあれば有効。各スタッフの当日の勤務窓の
+  //   外側をグレーで塗る。当日の行が無いスタッフは終日シフト外（休み）。
+  const storeShifts = weeklyShifts.filter(wsr => wsr.store_id === store);
+  const scheduleActive = storeShifts.length > 0;
+  const todayWindow = new Map<string, { start: number; end: number }>();
+  for (const wsr of storeShifts) {
+    if (wsr.day_of_week === dow) {
+      todayWindow.set(wsr.staff_id, { start: hhmmToMin(wsr.start_time.slice(0, 5)), end: hhmmToMin(wsr.end_time.slice(0, 5)) });
+    }
+  }
+  // スタッフの当日シフト外区間（openMin〜closeMin座標で返す）
+  const offShiftRanges = (staffId: string): { start: number; end: number; allDay: boolean }[] => {
+    if (!scheduleActive) return [];
+    const wdw = todayWindow.get(staffId);
+    if (!wdw) return [{ start: openMin, end: closeMin, allDay: true }];   // 当日の行なし=終日休み
+    const out: { start: number; end: number; allDay: boolean }[] = [];
+    if (wdw.start > openMin) out.push({ start: openMin, end: Math.min(wdw.start, closeMin), allDay: false });
+    if (wdw.end < closeMin) out.push({ start: Math.max(wdw.end, openMin), end: closeMin, allDay: false });
+    return out.filter(x => x.end > x.start);
+  };
 
   // 時刻目盛り（1時間ごと）
   const hourMarks: number[] = [];
@@ -555,6 +600,31 @@ function StoreBoard({
                         onMouseEnter={e => { e.currentTarget.style.background = 'var(--accent-weak)'; }}
                         onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                       />
+                    );
+                  })}
+
+                  {/* シフト外グレー（勤務スケジュール外＝AirReserveのグレーと同じ意味）。
+                      クリックは透過させる（シフト外でもスタッフ判断の手動予約は可能） */}
+                  {col.staffId !== null && offShiftRanges(col.staffId).map((g, gi) => {
+                    const top = (g.start - openMin) * PX_PER_MIN;
+                    const height = (g.end - g.start) * PX_PER_MIN;
+                    return (
+                      <div
+                        key={`shift-${gi}`}
+                        title={g.allDay ? 'この日はシフトが入っていません（休み）' : 'シフト外の時間帯です'}
+                        style={{
+                          position: 'absolute', top, left: 0, right: 0, height,
+                          background: 'rgba(120, 113, 108, 0.10)',
+                          pointerEvents: 'none', boxSizing: 'border-box',
+                          display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+                        }}
+                      >
+                        {height >= 40 && (
+                          <span style={{ fontSize: 10.5, color: 'var(--sub)', marginTop: 4, letterSpacing: '0.06em' }}>
+                            {g.allDay ? 'シフト外（休み）' : 'シフト外'}
+                          </span>
+                        )}
+                      </div>
                     );
                   })}
 
@@ -1156,6 +1226,7 @@ function Legend() {
     { label: '前金未確認', color: 'var(--amber)', title: '初回前金の入金確認が済んでいない予約です' },
     { label: 'AirReserve', color: 'var(--purple)', bg: 'var(--purple-weak)', title: 'AirReserveから取り込んだ予約です（参照のみ・編集不可）' },
     { label: '休み', color: 'var(--line)', hatch: true, title: 'スタッフが対応できない時間帯です' },
+    { label: 'シフト外', color: 'rgba(120,113,108,0.35)', title: '勤務スケジュール外の時間帯です（うすいグレーの帯）' },
   ];
   return (
     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>

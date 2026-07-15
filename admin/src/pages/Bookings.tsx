@@ -8,6 +8,7 @@ const STORE_NAMES: Record<StoreId, string> = { tamashima: '玉島店', kanamitsu
 interface Booking {
   id: string;
   store_id: string;
+  staff_id: string | null;
   starts_at: string;
   ends_at: string;
   status: string;
@@ -48,6 +49,19 @@ export function Bookings() {
   const [pendingOnly, setPendingOnly] = useState(false);
   // 取得エラーは必ず画面に出す（握りつぶすと「予約0件」と区別できず事故になる）
   const [fetchErr, setFetchErr] = useState<string | null>(null);
+  // スタッフ絞り込み（2026-07-15 オーナー要望: スタッフごとの予約を確認できるように）
+  const [staffFilter, setStaffFilter] = useState<string>('all');   // 'all' | staff_id | 'none'(未割当)
+  const [staffOptions, setStaffOptions] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from('public_staff_roster').select('staff_id, full_name');
+      const seen = new Map<string, string>();
+      for (const r of ((data as { staff_id: string; full_name: string }[]) ?? [])) {
+        if (!seen.has(r.staff_id)) seen.set(r.staff_id, r.full_name);
+      }
+      setStaffOptions([...seen.entries()].map(([id, name]) => ({ id, name })));
+    })();
+  }, []);
 
   const fetchBookings = useCallback(async () => {
     setLoading(true);
@@ -55,7 +69,7 @@ export function Bookings() {
     let query = supabase
       .from('app_bookings')
       .select(`
-        id, store_id, starts_at, ends_at, status, source,
+        id, store_id, staff_id, starts_at, ends_at, status, source,
         guest_name, guest_phone, guest_email, is_first_visit, deposit_status, customer_request,
         menu:treatment_menu_id(name, duration_minutes, price),
         staff:staff_id(full_name)
@@ -108,8 +122,13 @@ export function Bookings() {
 
   const isToday = isoDay(date) === isoDay(todayDate);
 
-  // 前金未確認のみフィルタ（当日の入金照合漏れ防止）
-  const visible = pendingOnly ? bookings.filter(b => b.deposit_status === 'pending') : bookings;
+  // スタッフ絞り込み → 前金未確認のみフィルタ（当日の入金照合漏れ防止）
+  const staffFiltered = staffFilter === 'all'
+    ? bookings
+    : staffFilter === 'none'
+      ? bookings.filter(b => b.staff_id === null)
+      : bookings.filter(b => b.staff_id === staffFilter);
+  const visible = pendingOnly ? staffFiltered.filter(b => b.deposit_status === 'pending') : staffFiltered;
   const active    = visible.filter(b => b.status !== 'cancelled');
   const firstVisit = active.filter(b => b.is_first_visit);
   const returning  = active.filter(b => !b.is_first_visit);
@@ -137,6 +156,17 @@ export function Bookings() {
             >{s === 'all' ? '全店' : STORE_NAMES[s as StoreId]}</button>
           ))}
         </div>
+        <select
+          className="select"
+          value={staffFilter}
+          onChange={(e) => setStaffFilter(e.target.value)}
+          title="スタッフごとの予約に絞り込みます"
+          style={{ minHeight: 34 }}
+        >
+          <option value="all">すべてのスタッフ</option>
+          {staffOptions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          <option value="none">未割当（おまかせ）</option>
+        </select>
         <div className="seg" style={{ marginLeft: 'auto' }}>
           <button
             type="button"
