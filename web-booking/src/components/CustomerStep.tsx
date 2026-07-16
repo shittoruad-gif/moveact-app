@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { CANCELLATION_POLICY, isValidEmail } from '../lib/api';
+import { PrivacyPolicy } from './PrivacyPolicy';
 
 export interface CustomerInfo {
   name: string;
@@ -9,20 +11,37 @@ export interface CustomerInfo {
   isStudent: boolean;
 }
 
+export interface PickedSummary {
+  storeName: string;
+  menuName: string;
+  dateLabel: string;   // 例: 2026年7月4日（土）
+  time: string;        // 例: 13:00
+  staffLabel: string;  // 例: おまかせ / 三上尚志（ご指名）
+}
+
 interface Props {
   customer: CustomerInfo;
   setCustomer: (c: CustomerInfo) => void;
   isFirstVisitHint?: boolean;
+  summary?: PickedSummary;   // 選択済み内容のミニ表示（入力中に日時を確認できるように）
 }
 
-export function CustomerStep({ customer, setCustomer }: Props) {
+export function CustomerStep({ customer, setCustomer, summary }: Props) {
   const up = (patch: Partial<CustomerInfo>) => setCustomer({ ...customer, ...patch });
   const emailInvalid = customer.email.trim().length > 0 && !isValidEmail(customer.email);
+  const [showPolicy, setShowPolicy] = useState(false);
 
   return (
     <div>
       <h2 className="heading">お客様情報</h2>
       <p className="lead">ご連絡先をご入力ください。</p>
+
+      {summary && (
+        <div className="picked-summary" aria-label="選択中のご予約内容">
+          <span className="ps-main">{summary.dateLabel}　{summary.time}</span>
+          <span className="ps-sub">{summary.menuName} ／ {summary.staffLabel} ／ {summary.storeName}</span>
+        </div>
+      )}
 
       <div className="field">
         <label htmlFor="c-name">お名前<span className="req">必須</span></label>
@@ -37,10 +56,11 @@ export function CustomerStep({ customer, setCustomer }: Props) {
       </div>
 
       <div className="field">
-        <label htmlFor="c-email">メールアドレス（任意）</label>
+        <label htmlFor="c-email">メールアドレス<span className="req">必須</span></label>
         <input id="c-email" type="email" inputMode="email" autoComplete="email" value={customer.email}
           placeholder="例：hanako@example.com" onChange={(e) => up({ email: e.target.value })} />
         {emailInvalid && <div className="err">メールアドレスの形式をご確認ください。</div>}
+        <div className="field-hint">ご予約確認・ご案内をお送りします。</div>
       </div>
 
       <div className="field">
@@ -55,7 +75,7 @@ export function CustomerStep({ customer, setCustomer }: Props) {
         <label htmlFor="student">学割を利用する（学生の方）</label>
       </div>
       {customer.isStudent && (
-        <p className="note" style={{ marginTop: 0, marginBottom: 8 }}>
+        <p className="field-hint" style={{ marginTop: 0, marginBottom: 8 }}>
           ※ご来店時に学生証のご提示をお願いいたします。事前決済の金額が学割料金になります。
         </p>
       )}
@@ -69,8 +89,21 @@ export function CustomerStep({ customer, setCustomer }: Props) {
       <div className="consent">
         <input id="consent" type="checkbox" checked={customer.consent}
           onChange={(e) => up({ consent: e.target.checked })} />
-        <label htmlFor="consent">上記キャンセルについて確認のうえ、予約に進みます。</label>
+        {/* label内にbuttonを入れると不正なネストになるため、リンクはlabelの外に置く */}
+        <span>
+          <label htmlFor="consent">上記キャンセルについて確認のうえ、</label>
+          <button type="button" onClick={() => setShowPolicy(true)}
+            style={{
+              background: 'none', border: 'none', padding: 0, font: 'inherit',
+              color: 'var(--caramel-deep)', textDecoration: 'underline', textUnderlineOffset: 3,
+            }}>
+            プライバシーポリシー
+          </button>
+          <label htmlFor="consent">に同意する</label>
+        </span>
       </div>
+
+      {showPolicy && <PrivacyPolicy onClose={() => setShowPolicy(false)} />}
     </div>
   );
 }

@@ -17,6 +17,28 @@ export interface Menu {
   price: number;
   treatmentType: string;
   description: string | null;
+  imageUrl?: string | null;   // メニュー写真（後日登録。未設定はプレースホルダ表示）
+  requiredStaffSlug?: string | null;   // 指名メニュー（設定時はそのスタッフ固定。booking_slug）
+}
+
+// 出勤曜日ラベル（0=日..6=土 → 月〜日の順で表示。週7日は「毎日」）
+export function workDaysLabel(days: number[]): string {
+  const NAMES = ['日', '月', '火', '水', '木', '金', '土'];
+  const uniq = [...new Set(days)];
+  if (uniq.length >= 7) return '毎日';
+  const ORDER = [1, 2, 3, 4, 5, 6, 0];
+  return ORDER.filter(d => uniq.includes(d)).map(d => NAMES[d]).join('・');
+}
+
+export interface RosterStaff {
+  id: string;
+  name: string;
+  slug?: string | null;   // booking_slug（指名メニューの担当解決に使用）
+  workDays?: number[] | null;   // 出勤曜日(0=日..6=土)。勤務スケジュール未設定店舗はnull
+  photoUrl?: string | null;   // 顔写真URL（公式サイト由来）。未設定はイニシャル表示
+  title?: string | null;      // 資格・肩書き（例: 柔道整復師・はり師・きゅう師）
+  bio?: string | null;        // 紹介文（公式サイトより引用）
+  skills?: string[];          // 担当できる施術種別(treatment_type)。指名リストの絞り込みに使用
 }
 
 export interface PageStaff {
@@ -30,6 +52,7 @@ export interface PageData {
   staff: PageStaff | null;
   stores: { id: StoreId; name: string }[];
   menusByStore: Record<string, Menu[]>;
+  staffByStore?: Record<string, RosterStaff[]>;   // 店舗別スタッフ一覧（フロー内の指名選択用）
 }
 
 export interface Slot {
@@ -65,6 +88,7 @@ export interface CreateBookingResult {
   depositAmount?: number | null;
   paymentUrl?: string | null;
   holdExpiresAt?: string | null;   // 事前決済の仮押さえ期限（ISO）。過ぎると自動キャンセル
+  zoomJoinUrl?: string | null;     // オンライン(Zoom)対象スタッフの予約のみ。会議参加URL
   error?: string;
   code?: 'slot_taken' | 'closed' | 'invalid' | 'rate_limited';
 }
@@ -72,6 +96,7 @@ export interface CreateBookingResult {
 export interface ConfirmBookingResult {
   ok?: boolean;
   alreadyConfirmed?: boolean;
+  zoomJoinUrl?: string | null;     // オンライン(Zoom)対象スタッフの予約のみ。会議参加URL
   error?: string;
   code?: 'hold_expired' | 'not_found' | 'invalid';
 }
@@ -98,10 +123,14 @@ export function getBookingPageData(slug?: string): Promise<PageData> {
   return postJson<PageData>('get-booking-page-data', { slug: slug ?? '' });
 }
 
-export function getAvailableSlots(p: {
+export async function getAvailableSlots(p: {
   storeId: StoreId; menuId: string; date: string; staffId?: string | null;
 }): Promise<SlotsResult> {
-  return postJson<SlotsResult>('get-available-slots', p);
+  const r = await postJson<SlotsResult & { error?: string }>('get-available-slots', p);
+  // サーバーがエラーJSON（{error}）を返した場合は例外にする。
+  // これをそのまま返すと slots 無し＝全時間帯「×満席」と誤描画され、障害を隠してしまう。
+  if (r && r.error) throw new Error(r.error);
+  return r;
 }
 
 export function createWebBooking(p: CreateBookingInput): Promise<CreateBookingResult> {
@@ -111,6 +140,51 @@ export function createWebBooking(p: CreateBookingInput): Promise<CreateBookingRe
 // 事前決済の「お支払いが完了しました」をお客様が知らせる（自己申告で予約確定）
 export function confirmWebBooking(bookingId: string): Promise<ConfirmBookingResult> {
   return postJson<ConfirmBookingResult>('confirm-web-booking', { bookingId });
+}
+
+// ---- キャンセル ----
+export interface CancelBookingInfo {
+  date: string;
+  time: string;
+  dateLabel: string;
+  menuName: string;
+  durationMinutes: number;
+  storeName: string;
+  storePhone: string;
+  guestName: string;
+  status: string;
+  depositStatus: string;
+  staffSlug: string | null;
+  canCancel: boolean;
+  cannotCancelReason: string | null;
+}
+
+export interface CancelInfoResult {
+  ok?: boolean;
+  booking?: CancelBookingInfo;
+  error?: string;
+  code?: string;
+}
+
+export interface CancelResult {
+  ok?: boolean;
+  alreadyCancelled?: boolean;
+  staffSlug?: string | null;
+  error?: string;
+  code?: string;
+}
+
+export async function getCancelInfo(token: string): Promise<CancelInfoResult> {
+  const res = await fetch(`${FN}/cancel-web-booking?token=${encodeURIComponent(token)}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const text = await res.text();
+  try { return text ? JSON.parse(text) : {}; } catch { throw new Error(`HTTP ${res.status}`); }
+}
+
+export function cancelBooking(token: string): Promise<CancelResult> {
+  return postJson<CancelResult>('cancel-web-booking', { token });
 }
 
 // ---- 店舗情報（表示用） ----
@@ -129,10 +203,10 @@ export const STORE_INFO: Record<StoreId, { name: string; address: string; phone:
 
 export const CANCELLATION_POLICY = {
   headline:
-    '当日キャンセル・無断キャンセルは、施術1回分の料金、または回数券1回分の消化となります。',
+    '当日キャンセル・無断キャンセルは、施術1回分の料金、または回数券1回分消化、もしくはサブスク1回分消化となります。',
   lines: [
     'ご予約の変更・キャンセルは、前日までにお願いいたします。',
-    '当日のキャンセル・ご変更、および無断キャンセルの場合は、施術1回分の料金（回数券をお持ちの場合は回数券1回分の消化）を申し受けます。',
+    '当日のキャンセル・ご変更、および無断キャンセルの場合は、施術1回分の料金（回数券をお持ちの場合は回数券1回分消化、サブスクをご利用の場合はサブスクの施術1回分消化）を申し受けます。',
     '体調不良などやむを得ない事情の場合は、できるだけ早めにご連絡ください。',
   ],
 };

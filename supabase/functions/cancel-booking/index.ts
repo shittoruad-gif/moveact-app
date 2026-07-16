@@ -65,14 +65,31 @@ serve(async (req) => {
       });
     }
 
-    // Update booking status
-    await supabase
+    // 冪等性ガード: 既にキャンセル済みなら二重処理しない（二度課金・二重チケット消化を防ぐ）
+    if (String(booking.status).startsWith('cancelled')) {
+      return new Response(JSON.stringify({ success: true, alreadyCancelled: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Update booking status（status を条件に含め、競合時に二重更新しない）
+    const { data: updatedRows } = await supabase
       .from('group_lesson_bookings')
       .update({
         status: 'cancelled_same_day',
         cancelled_at: new Date().toISOString(),
       })
-      .eq('id', bookingId);
+      .eq('id', bookingId)
+      .eq('status', booking.status)
+      .select('id');
+    // 別リクエストが先にキャンセル済み → 課金処理を走らせずに終了
+    if (!updatedRows || updatedRows.length === 0) {
+      return new Response(JSON.stringify({ success: true, alreadyCancelled: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
     // Decrement lesson bookings count
     await supabase.rpc('decrement_lesson_bookings', { lesson_id: booking.group_lesson_id });

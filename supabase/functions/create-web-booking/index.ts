@@ -206,6 +206,10 @@ serve(async (req) => {
 
     const slotStart = toMin(time);
     const slotEnd = slotStart + duration;
+    // 画面は15分グリッドのみ提示。直接POSTでの中途半端な時刻（10:07等）を防ぐ
+    if (slotStart % 15 !== 0) {
+      return json({ error: '予約時刻は15分単位で指定してください', code: 'invalid' }, 400);
+    }
     if (slotStart < openMin! || slotEnd > closeMin!) {
       return json({ error: '営業時間外です', code: 'closed' }, 409);
     }
@@ -221,6 +225,25 @@ serve(async (req) => {
     const startEpoch = base + slotStart * 60000;
     if (startEpoch <= Date.now()) {
       return json({ error: '過去の時刻は予約できません', code: 'slot_taken' }, 409);
+    }
+
+    // --- 受付締切（店舗設定 stores.booking_lead_minutes: 開始N分前までネット予約可）---
+    // 画面には締切後の枠は出ないが、直接POST・画面表示後の時間経過に備えてここでも拒否する。
+    // 取得エラー時は締切なしに倒さずエラーを返す（フェイルクローズ）。
+    const { data: leadRow, error: leadErr } = await supabase
+      .from('stores').select('booking_lead_minutes').eq('id', storeId).maybeSingle();
+    if (leadErr) {
+      console.error('create-web-booking: stores取得失敗:', leadErr.message);
+      return json({ error: '受付設定の確認に失敗しました。時間をおいてお試しください。', code: 'invalid' }, 500);
+    }
+    const leadMin = (leadRow as { booking_lead_minutes?: number | null } | null)?.booking_lead_minutes ?? 0;
+    if (leadMin > 0 && startEpoch <= Date.now() + leadMin * 60000) {
+      const h = Math.floor(leadMin / 60), m = leadMin % 60;
+      const leadLabel = h === 0 ? `${m}分` : m === 0 ? `${h}時間` : `${h}時間${m}分`;
+      return json({
+        error: `ネット予約はご来店の${leadLabel}前まで受け付けています。お急ぎの場合はお電話でお問い合わせください。`,
+        code: 'slot_taken',
+      }, 409);
     }
     // 受付は本日〜180日先まで（JSTの今日0時起点で判定）。
     const jstTodayMidnight = (() => {
@@ -462,15 +485,15 @@ serve(async (req) => {
       .neq('deposit_status', 'pending');
     if ((priorBookings ?? 0) > 0) isFirstVisit = false;
     if (isFirstVisit) {
-      // 会員(アプリ登録)の電話とも照合。
-      //   profiles.phone はフリー入力でハイフン等を含むことがあるため、生値比較だと
-      //   ハイフン無しで入力した再来店会員を取りこぼす。両辺を数字のみに正規化して比較する。
-      const { data: profs } = await supabase
-        .from('profiles').select('id, phone').not('phone', 'is', null);
-      const matched = (profs ?? []).some(
-        (p: { phone: string | null }) => (p.phone ?? '').replace(/\D/g, '') === phoneNorm
-      );
-      if (matched) isFirstVisit = false;
+      // 会員(アプリ登録)の電話とも照合。DB側で数字のみに正規化して件数を数える
+      // （全件フェッチだと会員が行数上限を超えたとき取りこぼし、再来店会員が初回扱いになる）。
+      const { data: memberCount, error: memberErr } = await supabase
+        .rpc('count_members_by_phone', { p_phone_norm: phoneNorm });
+      if (memberErr) {
+        console.error('count_members_by_phone failed:', memberErr.message);
+      } else if ((memberCount ?? 0) > 0) {
+        isFirstVisit = false;
+      }
     }
 
     // --- 前金（初回のみ）---
