@@ -24,7 +24,7 @@ interface Booking {
 }
 
 function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
 }
 
 function fmtDate(d: Date) {
@@ -40,7 +40,12 @@ function isoDay(d: Date) {
 }
 
 export function Bookings() {
-  const todayDate = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
+  // 「今日」はJST基準（端末TZが日本以外でも日付がズレないようローカル0時のアンカーを作る）
+  const todayDate = (() => {
+    const s = new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
+    const [y, m, d] = s.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  })();
   const [date, setDate] = useState(todayDate);
   const [storeFilter, setStoreFilter] = useState<StoreId | 'all'>('all');
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -99,7 +104,11 @@ export function Bookings() {
       .from('app_bookings')
       .update({ status: 'cancelled' })
       .eq('id', id);
-    if (!error) setBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'cancelled' } : b));
+    if (error) {
+      window.alert(`エラー: キャンセルに失敗しました。予約はそのまま残っています（${error.message}）`);
+    } else {
+      setBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'cancelled' } : b));
+    }
     setCancelling(null);
   };
 
@@ -111,7 +120,11 @@ export function Bookings() {
       .from('app_bookings')
       .update({ status })
       .eq('id', id);
-    if (!error) await fetchBookings();
+    if (error) {
+      window.alert(`エラー: 「${label}」の記録に失敗しました。もう一度お試しください（${error.message}）`);
+    } else {
+      await fetchBookings();
+    }
     setUpdating(null);
   };
 

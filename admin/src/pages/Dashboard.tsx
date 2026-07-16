@@ -42,7 +42,10 @@ export function Dashboard() {
 
   async function fetchStats() {
     setLoading(true);
-    const now = new Date();
+    // 「今日」はJST基準で求める（端末TZが日本以外でも日付がズレないようアンカーを作る）
+    const jstStr = new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
+    const [jy, jm, jd] = jstStr.split('-').map(Number);
+    const now = new Date(jy, jm - 1, jd);
     const todayStr = isoDay(now);
     const t = new Date(now);
     t.setDate(t.getDate() + 1);

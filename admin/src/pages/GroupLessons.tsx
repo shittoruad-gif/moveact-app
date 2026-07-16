@@ -127,11 +127,20 @@ export function GroupLessons() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    await supabase.from('group_lessons').insert({
+    // datetime-local の値（例 "2026-07-20T10:00"）はタイムゾーン無しのため、
+    // そのまま保存するとUTC解釈されて9時間ズレる。+09:00 を明示して保存する。
+    if (!form.starts_at || !form.ends_at) return;
+    const { error } = await supabase.from('group_lessons').insert({
       ...form,
+      starts_at: `${form.starts_at}:00+09:00`,
+      ends_at: `${form.ends_at}:00+09:00`,
       is_ticket_eligible: true,
       is_cancelled: false,
     });
+    if (error) {
+      window.alert(`エラー: レッスンの登録に失敗しました（${error.message}）`);
+      return;
+    }
     setShowForm(false);
     setForm({ store_id: 'kanamitsu', title: '', instructor_name: '', starts_at: '', ends_at: '', max_capacity: 4, price: 3000 });
     fetchLessons();
@@ -139,7 +148,11 @@ export function GroupLessons() {
 
   async function handleCancel(lessonId: string) {
     if (!confirm('このレッスンをキャンセルします。よろしいですか？')) return;
-    await supabase.from('group_lessons').update({ is_cancelled: true }).eq('id', lessonId);
+    const { error } = await supabase.from('group_lessons').update({ is_cancelled: true }).eq('id', lessonId);
+    if (error) {
+      window.alert(`エラー: キャンセルに失敗しました（${error.message}）`);
+      return;
+    }
     fetchLessons();
   }
 

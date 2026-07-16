@@ -100,8 +100,10 @@ interface QuickSlotCtx {
   staffId: string | null;
   staffName: string;
   slotMin: number;
-  openMin: number;
+  openMin: number;      // グリッド表示範囲（6:00〜24:00）
   closeMin: number;
+  bizOpenMin: number;   // 店舗の営業時間（「終日にする」はこちらを使う）
+  bizCloseMin: number;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -122,13 +124,21 @@ function hhmmToMin(hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number);
   return h * 60 + (m || 0);
 }
-// ローカル日時(ISO/Date)→ その日の0時からの分
+// 日時(ISO)→ JSTでのその日の0時からの分（端末のタイムゾーンに依存させない）
 function dateToMinOfDay(iso: string): number {
-  const d = new Date(iso);
-  return d.getHours() * 60 + d.getMinutes();
+  const j = new Date(new Date(iso).getTime() + 9 * 3600_000);
+  return j.getUTCHours() * 60 + j.getUTCMinutes();
 }
 function fmtClock(iso: string) {
-  return new Date(iso).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
+}
+// ブロック描画用の終了分。終了が開始より後なのに「その日の分」が開始以下
+// （＝ちょうど24:00終了、または日をまたぐ）場合はグリッド末尾まで伸ばして描く。
+// これが無いと 24:00 終了のブロックが15分の帯に潰れて見えなくなる。
+function endMinForRender(startsIso: string, endsIso: string, startMin: number, closeMin: number): number {
+  const endMin = dateToMinOfDay(endsIso);
+  if (new Date(endsIso).getTime() > new Date(startsIso).getTime() && endMin <= startMin) return closeMin;
+  return endMin;
 }
 function minToHHMM(min: number): string {
   const h = Math.floor(min / 60);
@@ -161,8 +171,19 @@ function bookingVisual(b: BookingRow): { color: string; label: string } {
 // ─────────────────────────────────────────────────────────────
 // メイン
 // ─────────────────────────────────────────────────────────────
+// JSTの現在時刻（0時からの分）。端末のタイムゾーンに依存させない
+function jstNowMin(): number {
+  const j = new Date(Date.now() + 9 * 3600_000);
+  return j.getUTCHours() * 60 + j.getUTCMinutes();
+}
+
 export function Timeline() {
-  const todayDate = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
+  // JSTの「今日」をローカル0時の日付アンカーとして持つ（端末TZが日本以外でも日付がズレない）
+  const todayDate = useMemo(() => {
+    const s = new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
+    const [y, m, d] = s.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }, []);
   const [date, setDate] = useState<Date>(todayDate);
   // 店舗は常に1店舗のみ表示（両店同時表示は見にくいため廃止・2026-07-15オーナー要望）。
   // 前回選んだ店舗を記憶して次回もその店舗から開く。
@@ -187,16 +208,10 @@ export function Timeline() {
   // 空き枠クリックで開く「予約/予定/休み」登録モーダル
   const [quickSlot, setQuickSlot] = useState<QuickSlotCtx | null>(null);
 
-  // 現在時刻（分）— 60秒ごと更新
-  const [nowMin, setNowMin] = useState<number>(() => {
-    const n = new Date();
-    return n.getHours() * 60 + n.getMinutes();
-  });
+  // 現在時刻（JST・分）— 60秒ごと更新
+  const [nowMin, setNowMin] = useState<number>(jstNowMin);
   useEffect(() => {
-    const id = setInterval(() => {
-      const n = new Date();
-      setNowMin(n.getHours() * 60 + n.getMinutes());
-    }, 60_000);
+    const id = setInterval(() => setNowMin(jstNowMin()), 60_000);
     return () => clearInterval(id);
   }, []);
 
@@ -221,10 +236,12 @@ export function Timeline() {
       .eq('day_of_week', dow);
     hoursQ = hoursQ.eq('store_id', storeFilter);
 
+    // 臨時休業は店舗別テーブル（store_id NOT NULL）。絞らないと他店の休業がこの店にも表示される
     let closedQ = supabase
       .from('store_closed_days')
       .select('date, is_closed, open_time, close_time, reason')
-      .eq('date', dayStr);
+      .eq('date', dayStr)
+      .eq('store_id', storeFilter);
 
     let bookingsQ = supabase
       .from('app_bookings')
@@ -239,19 +256,20 @@ export function Timeline() {
       .order('starts_at');
     bookingsQ = bookingsQ.eq('store_id', storeFilter);
 
+    // 「この日に重なる」条件で取得（開始日だけで絞ると、前日から続く・日をまたぐブロックが表示から漏れる）
     let unavailQ = supabase
       .from('staff_unavailability')
       .select('id, staff_id, store_id, starts_at, ends_at, reason, block_type')
-      .gte('starts_at', lo)
-      .lte('starts_at', hi);
+      .lt('starts_at', hi)
+      .gt('ends_at', lo);
     unavailQ = unavailQ.eq('store_id', storeFilter);
 
     // AirReserve取込予約（読み取り専用。二重予約防止のため表示必須）
     let airQ = supabase
       .from('airreserve_events')
       .select('id, store_id, staff_id, starts_at, ends_at, summary')
-      .gte('starts_at', lo)
-      .lte('starts_at', hi)
+      .lt('starts_at', hi)
+      .gt('ends_at', lo)
       .order('starts_at');
     airQ = airQ.eq('store_id', storeFilter);
 
@@ -269,19 +287,26 @@ export function Timeline() {
       ? `予約データの取得に失敗しました。表示が0件でも実際には予約が入っている可能性があります。再読み込みしても直らない場合は管理者へ連絡してください。（詳細: ${firstErr.message}）`
       : null);
 
+    // 前日から続くブロックは開始をこの日の0:00に丸めて描画する（そのままだと前日の時刻位置に誤描画される）
+    const loMs = new Date(lo).getTime();
+    const clampStart = <T extends { starts_at: string }>(row: T): T =>
+      new Date(row.starts_at).getTime() < loMs
+        ? { ...row, starts_at: new Date(loMs).toISOString() }
+        : row;
+
     const airRows = ((a.data as AirReserveRow[]) ?? []).filter(ev => {
       if (ev.staff_id === null) {
         console.warn(`[Timeline] airreserve_events ${ev.id} は staff_id が null のため表示をスキップします (starts_at=${ev.starts_at})`);
         return false;
       }
       return true;
-    });
+    }).map(clampStart);
 
     setRoster((r.data as RosterRow[]) ?? []);
     setHours((h.data as BusinessHoursRow[]) ?? []);
     setClosedDays((c.data as ClosedDayRow[]) ?? []);
     setBookings((b.data as unknown as BookingRow[]) ?? []);
-    setUnavail((u.data as UnavailRow[]) ?? []);
+    setUnavail(((u.data as UnavailRow[]) ?? []).map(clampStart));
     setAirEvents(airRows);
     setWeeklyShifts((w.data as WeeklyShiftRow[]) ?? []);
     setLoading(false);
@@ -539,7 +564,7 @@ function StoreBoard({
   for (let m = Math.ceil(openMin / 60) * 60; m <= closeMin; m += 60) hourMarks.push(m);
 
   const handleEmptyClick = (col: Column, slotMin: number) => {
-    onEmptyClick({ store, staffId: col.staffId, staffName: col.name, slotMin, openMin, closeMin });
+    onEmptyClick({ store, staffId: col.staffId, staffName: col.name, slotMin, openMin, closeMin, bizOpenMin, bizCloseMin });
   };
 
   return (
@@ -739,7 +764,7 @@ function ReservationBlock({ b, openMin, closeMin, onClick }: { b: BookingRow; op
   const startMin = dateToMinOfDay(b.starts_at);
   let endMin: number;
   if (b.ends_at) {
-    endMin = dateToMinOfDay(b.ends_at);
+    endMin = endMinForRender(b.starts_at, b.ends_at, startMin, closeMin);
   } else if (b.menu?.duration_minutes) {
     endMin = startMin + b.menu.duration_minutes;
   } else {
@@ -979,6 +1004,12 @@ function BookingEditModal({ b, onClose, onSaved }: {
     if (Number.isNaN(startsAt.getTime())) { setError('日付・時刻の形式が正しくありません'); return; }
     const endsAt = new Date(startsAt.getTime() + durationMin * 60_000);
 
+    // 24:00を超える予約は不可（予約表は1日単位のため、翌日にはみ出た分が見えなくなる）
+    if (hhmmToMin(time) + durationMin > 24 * 60) {
+      setError('終了が24:00を超える予約は保存できません。開始時刻か所要時間を調整してください。');
+      return;
+    }
+
     // AirReserve取込予約との重複チェック（NewBookingと同方式・同文言）。
     // キャンセルにする保存は枠を空けるだけなので確認不要。
     if (status !== 'cancelled') {
@@ -1007,6 +1038,26 @@ function BookingEditModal({ b, onClose, onSaved }: {
           'この時間帯はこの店舗のAirReserveの予約と重複しています。\n担当スタッフが未指定のため、担当を決める際に時間が重なる可能性があります。\nこのまま保存しますか？',
         );
         if (!proceed) return;
+      }
+
+      // 休み・予定ブロックとの重複チェック（DB制約では防げないため保存前に確認）
+      if (staffId) {
+        setSaving(true);
+        const { data: blocks, error: blockErr } = await supabase
+          .from('staff_unavailability')
+          .select('id')
+          .eq('staff_id', staffId)
+          .lt('starts_at', endsAt.toISOString())
+          .gt('ends_at', startsAt.toISOString());
+        setSaving(false);
+        if (blockErr) {
+          setError(`エラー: 休み・予定の重複確認に失敗しました（${blockErr.message}）`);
+          return;
+        }
+        if ((blocks?.length ?? 0) > 0) {
+          setError('この時間帯はスタッフの休み・予定と重複しています。予約を入れる場合は、先に予約表のブロックをクリックして削除してください。');
+          return;
+        }
       }
     }
 
@@ -1236,6 +1287,8 @@ function QuickSlotModal({ ctx, dayStr, bookings, airEvents, onClose, onSaved }: 
     for (let m = 6 * 60; m <= 23 * 60 + 45; m += 15) opts.push(minToHHMM(m));
     return opts;
   }, []);
+  // 終了時刻は24:00まで選べる（Postgresは 'T24:00:00+09:00' を翌日0:00として受け付ける）
+  const endTimeOptions = useMemo(() => [...timeOptions.slice(1), '24:00'], [timeOptions]);
 
   // 入力中の時間帯と既存予約（app_bookings + AirReserve）の重なり（注意喚起のみ・登録は可能）
   const hasOverlap = useMemo(() => {
@@ -1351,7 +1404,7 @@ function QuickSlotModal({ ctx, dayStr, bookings, airEvents, onClose, onSaved }: 
                 <div className="field">
                   <label className="field-label">終了時刻</label>
                   <select className="select" value={endTime} onChange={e => setEndTime(e.target.value)}>
-                    {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                    {endTimeOptions.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
                 <div className="field" style={{ gridColumn: '1 / -1' }}>
@@ -1370,7 +1423,7 @@ function QuickSlotModal({ ctx, dayStr, bookings, airEvents, onClose, onSaved }: 
                 <button
                   type="button"
                   className="btn btn-sm"
-                  onClick={() => { setStartTime(minToHHMM(ctx.openMin)); setEndTime(minToHHMM(ctx.closeMin)); }}
+                  onClick={() => { setStartTime(minToHHMM(ctx.bizOpenMin)); setEndTime(minToHHMM(ctx.bizCloseMin)); }}
                   title="開始・終了を営業時間いっぱいにします（終日の休みなど）"
                 >終日にする</button>
               </div>
@@ -1427,7 +1480,7 @@ function QuickSlotModal({ ctx, dayStr, bookings, airEvents, onClose, onSaved }: 
 // ─────────────────────────────────────────────────────────────
 function AirReserveBlock({ ev, openMin, closeMin }: { ev: AirReserveRow; openMin: number; closeMin: number }) {
   const startMin = dateToMinOfDay(ev.starts_at);
-  const endMin = dateToMinOfDay(ev.ends_at);
+  const endMin = endMinForRender(ev.starts_at, ev.ends_at, startMin, closeMin);
   // 営業時間にクランプ（描画はみ出し防止）
   const top = (startMin - openMin) * PX_PER_MIN;
   const rawH = (endMin - startMin) * PX_PER_MIN;
@@ -1483,7 +1536,7 @@ function AirReserveBlock({ ev, openMin, closeMin }: { ev: AirReserveRow; openMin
 // ─────────────────────────────────────────────────────────────
 function UnavailBlock({ u, openMin, closeMin, onDelete }: { u: UnavailRow; openMin: number; closeMin: number; onDelete?: () => void }) {
   const startMin = dateToMinOfDay(u.starts_at);
-  const endMin = dateToMinOfDay(u.ends_at);
+  const endMin = endMinForRender(u.starts_at, u.ends_at, startMin, closeMin);
   const top = (startMin - openMin) * PX_PER_MIN;
   const rawH = (endMin - startMin) * PX_PER_MIN;
   const maxH = (closeMin - startMin) * PX_PER_MIN;

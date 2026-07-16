@@ -65,32 +65,38 @@ export function Cancellations() {
   async function handleCancel(bookingId: string, chargeType: 'ticket' | 'stripe' | 'waive') {
     if (!window.confirm(CHARGE_CONFIRM[chargeType])) return;
     setProcessing(bookingId);
-    const { data: { session } } = await supabase.auth.getSession();
+    // 通信断・サーバーエラー（非JSON応答）でも「処理中…」のまま固まらないよう必ず finally で解除する
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
 
-    const res = await fetch(
-      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/cancel-booking`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({
-          bookingId,
-          chargeType,
-          note: `管理画面からの当日キャンセル処理 (${chargeType})`,
-        }),
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/cancel-booking`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session?.access_token}`,
+          },
+          body: JSON.stringify({
+            bookingId,
+            chargeType,
+            note: `管理画面からの当日キャンセル処理 (${chargeType})`,
+          }),
+        }
+      );
+
+      const result = await res.json().catch(() => ({ success: false, error: `サーバー応答の解析に失敗しました（HTTP ${res.status}）` }));
+      if (result.success) {
+        alert('キャンセル処理が完了しました');
+        fetchTodayBookings();
+      } else {
+        alert(`エラー: ${result.error ?? '不明なエラー'}`);
       }
-    );
-
-    const result = await res.json();
-    if (result.success) {
-      alert('キャンセル処理が完了しました');
-      fetchTodayBookings();
-    } else {
-      alert(`エラー: ${result.error}`);
+    } catch (e) {
+      alert(`エラー: キャンセル処理の通信に失敗しました（${(e as Error).message}）。処理されたかどうか予約一覧で確認してください。`);
+    } finally {
+      setProcessing(null);
     }
-    setProcessing(null);
   }
 
   return (

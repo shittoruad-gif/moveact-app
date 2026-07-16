@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 
@@ -277,6 +277,8 @@ export function NewBooking() {
   const [masterLoaded, setMasterLoaded] = useState(false);
   const [form, setForm]           = useState(() => formFromParams(searchParams));
   const [loading, setLoading]     = useState(false);
+  // 二重送信ガード（disabled の再レンダー前に2度目のクリックが入るのを防ぐ）
+  const submittingRef = useRef(false);
   const [success, setSuccess]     = useState(false);
   const [error, setError]         = useState<string | null>(null);
   const [dayRows, setDayRows]     = useState<DayRow[]>([]);
@@ -479,6 +481,9 @@ export function NewBooking() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (recurOn) return; // 繰り返し予約は「繰り返し予約」欄の確認→登録フローで行う
+    // 二重送信ガード（素早い2度押しで同じ予約が2件できるのを防ぐ。
+    // 指名なし予約はDBのEXCLUDE制約対象外のため、ここが唯一の防衛線）
+    if (submittingRef.current) return;
     if (!form.guestName.trim()) { setError('お名前を入力してください'); return; }
     if (!form.guestPhone.trim()) { setError('電話番号を入力してください'); return; }
     if (!form.menuId) { setError('メニューを選択してください'); return; }
@@ -491,6 +496,14 @@ export function NewBooking() {
     const duration = selectedMenu?.duration_minutes ?? 60;
     const endsAt   = new Date(startsAt.getTime() + duration * 60 * 1000);
 
+    // 24:00を超える予約は不可（予約表は1日単位のため、翌日にはみ出た分が見えなくなる）
+    const [th, tm] = form.time.split(':').map(Number);
+    if (th * 60 + tm + duration > 24 * 60) {
+      setError('終了が24:00を超える予約は登録できません。開始時刻を早めてください。');
+      return;
+    }
+
+    submittingRef.current = true;
     setLoading(true); setError(null);
 
     // AirReserve取込予約との重複チェック
@@ -507,13 +520,13 @@ export function NewBooking() {
     const { data: airOverlaps, error: airErr } = await airQ;
 
     if (airErr) {
-      setLoading(false);
+      setLoading(false); submittingRef.current = false;
       setError(`エラー: AirReserve予約の重複確認に失敗しました（${airErr.message}）`);
       return;
     }
     if (form.staffId && (airOverlaps?.length ?? 0) > 0) {
       // 指名スタッフのAirReserve予約と重なる → 保存をブロック
-      setLoading(false);
+      setLoading(false); submittingRef.current = false;
       setError('この時間帯はAirReserveの予約と重複しています。別の時間を選んでください。');
       return;
     }
@@ -524,7 +537,28 @@ export function NewBooking() {
         'この時間帯はこの店舗のAirReserveの予約と重複しています。\n担当スタッフが未指定のため、担当を決める際に時間が重なる可能性があります。\nこのまま登録しますか？',
       );
       if (!proceed) {
-        setLoading(false);
+        setLoading(false); submittingRef.current = false;
+        return;
+      }
+    }
+
+    // 休み・予定ブロック（staff_unavailability）との重複チェック。
+    // DBのEXCLUDE制約は app_bookings 同士のみが対象で、休みブロックとの重複は防げないため保存前に確認する
+    if (form.staffId) {
+      const { data: blocks, error: blockErr } = await supabase
+        .from('staff_unavailability')
+        .select('id, block_type')
+        .eq('staff_id', form.staffId)
+        .lt('starts_at', endsAt.toISOString())
+        .gt('ends_at', startsAt.toISOString());
+      if (blockErr) {
+        setLoading(false); submittingRef.current = false;
+        setError(`エラー: 休み・予定の重複確認に失敗しました（${blockErr.message}）`);
+        return;
+      }
+      if ((blocks?.length ?? 0) > 0) {
+        setLoading(false); submittingRef.current = false;
+        setError('この時間帯はスタッフの休み・予定と重複しています。予約を入れる場合は、先に予約表または「スタッフ休み」ページでブロックを削除してください。');
         return;
       }
     }
@@ -548,7 +582,7 @@ export function NewBooking() {
       payment_status:     'not_required',
     });
 
-    setLoading(false);
+    setLoading(false); submittingRef.current = false;
 
     if (err) {
       if (err.code === '23P01') {
