@@ -12,7 +12,7 @@ import { StaffOff } from './pages/StaffOff';
 import { StoreSettings } from './pages/StoreSettings';
 import { StaffPerformance } from './pages/StaffPerformance';
 import { UpdateHistory } from './pages/UpdateHistory';
-import { DemoMode } from './pages/DemoMode';
+import { DemoMode } from './pages/demo/DemoMode';
 import { AuthContext, useAuth } from './lib/auth';
 import type { Session } from '@supabase/supabase-js';
 
