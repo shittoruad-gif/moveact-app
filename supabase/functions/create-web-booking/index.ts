@@ -107,6 +107,40 @@ serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
+    // --- 冪等キーによる再送信の短絡（最優先・空き確認やレート制限より前）---
+    //   通信断後の再送信で同じ予約試行が来たら、二重予約やslot_taken誤返しをせず
+    //   既存の予約をそのまま返す。空き確認(slot_taken)が先に走ると再送信が弾かれるため、
+    //   ここで最初に判定する。決済URLは既存予約の前金額から再照合する。
+    if (idempotencyKey) {
+      const { data: prior } = await supabase
+        .from('app_bookings')
+        .select('id, deposit_status, deposit_amount, hold_expires_at')
+        .eq('idempotency_key', idempotencyKey).maybeSingle();
+      if (prior) {
+        const priorRequires = prior.deposit_status === 'pending';
+        let priorUrl: string | null = null;
+        if (priorRequires && prior.deposit_amount) {
+          const isStudentAmt = prior.deposit_amount === 3500 || prior.deposit_amount === 4400;
+          let pq = supabase.from('payment_links').select('url, store_id')
+            .eq('is_active', true).eq('amount', prior.deposit_amount).eq('is_subscription', false);
+          pq = isStudentAmt ? pq.eq('is_student', true) : pq.eq('auto_match', true);
+          const { data: pl } = await pq
+            .or(`store_id.eq.${storeId},store_id.is.null`)
+            .order('created_at', { ascending: false }).order('id', { ascending: true });
+          priorUrl = ((pl ?? []).find((l) => l.store_id === storeId)
+            ?? (pl ?? []).find((l) => l.store_id === null))?.url ?? null;
+        }
+        return json({
+          bookingId: prior.id,
+          requiresDeposit: priorRequires,
+          depositAmount: prior.deposit_amount,
+          paymentUrl: priorUrl,
+          holdExpiresAt: prior.hold_expires_at,
+          zoomJoinUrl: null,
+        });
+      }
+    }
+
     // --- 期限切れの仮押さえ（未払い）を先に解放（pg_cron不在時の保険・枠を正しく開ける）---
     await supabase.rpc('cancel_expired_deposit_holds').then(() => {}, () => {});
 
@@ -549,6 +583,7 @@ serve(async (req) => {
     //   hold_expires_at で「事前決済待ちの仮押さえ」を表す（決済完了で paid＝正式確定）。
     const startsAt = new Date(base + slotStart * 60000).toISOString();
     const endsAt = new Date(base + slotEnd * 60000).toISOString();
+
     const { data: inserted, error: insErr } = await supabase
       .from('app_bookings')
       .insert({
