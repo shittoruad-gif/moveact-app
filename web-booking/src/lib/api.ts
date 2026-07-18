@@ -80,6 +80,7 @@ export interface CreateBookingInput {
   guestEmail?: string;
   request?: string;
   isStudent?: boolean;   // 学割（学生割引）希望
+  idempotencyKey?: string;   // 予約1回の試行につき固定。再送信での二重予約を防ぐ
 }
 
 export interface CreateBookingResult {

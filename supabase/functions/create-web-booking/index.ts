@@ -79,6 +79,8 @@ serve(async (req) => {
     const guestPhone = (b.guestPhone ?? '').toString().trim();
     const guestEmail = (b.guestEmail ?? '').toString().trim();
     const request = (b.request ?? '').toString().trim().slice(0, 1000) || null;
+    // 冪等キー（予約1回の試行につき固定。再送信での二重予約を防ぐ）
+    const idempotencyKey = (b.idempotencyKey ?? '').toString().trim().slice(0, 100) || null;
 
     // --- 入力検証 ---
     if (!storeId || !menuId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
@@ -572,11 +574,30 @@ serve(async (req) => {
         deposit_status: depositStatus,
         deposit_amount: depositAmount,
         hold_expires_at: holdExpiresAt,
+        idempotency_key: idempotencyKey,
       })
       .select('id, cancel_token')
       .single();
 
     if (insErr) {
+      // 23505 = unique_violation。冪等キー重複＝通信断後の再送信で、既に同じ予約が
+      // 作成されている。二重予約にせず、既存の予約をそのまま返す（この試行と同一入力
+      // なので paymentUrl 等は再計算済みの値がそのまま使える。通知・メールは初回送信済み）。
+      if ((insErr as any).code === '23505' && idempotencyKey) {
+        const { data: existing } = await supabase
+          .from('app_bookings').select('id')
+          .eq('idempotency_key', idempotencyKey).maybeSingle();
+        if (existing) {
+          return json({
+            bookingId: existing.id,
+            requiresDeposit: depositRequired,
+            depositAmount,
+            paymentUrl,
+            holdExpiresAt,
+            zoomJoinUrl: null,
+          });
+        }
+      }
       // 23P01 = exclusion_violation（同一スタッフ枠の二重予約）
       if ((insErr as any).code === '23P01' || /exclud/i.test(insErr.message)) {
         return json({ error: 'この枠は埋まってしまいました。別の時間をお選びください。', code: 'slot_taken' }, 409);

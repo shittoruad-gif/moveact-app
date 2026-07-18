@@ -163,7 +163,16 @@ export function CancelPage() {
                 </div>
               </div>
             )}
-            <button className="btn" style={{ marginTop: 16 }} onClick={() => window.history.back()}>
+            <button
+              className="btn"
+              style={{ marginTop: 16 }}
+              onClick={() => {
+                // メールから新規タブで開くと history.back() が効かない（死にボタン）。
+                // 直前の履歴が無ければ予約トップへ遷移する。
+                if (window.history.length > 1) window.history.back();
+                else window.location.href = '/';
+              }}
+            >
               戻る
             </button>
           </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, Fragment } from 'react';
+import { useState, useEffect, useRef, useMemo, Fragment } from 'react';
 import type { StoreId, Menu, Slot } from '../lib/api';
 import { getAvailableSlots, nextDays } from '../lib/api';
 
@@ -14,7 +14,8 @@ interface Props {
 }
 
 // 表示できる範囲（4週間ぶん）。7日ずつのウィンドウで表示する。
-const ALL_DAYS = nextDays(28);
+// ※ nextDays(28) はコンポーネント内で算出する（モジュール読み込み時に固定すると、
+//   タブを開いたまま日付が変わったとき先頭が「昨日」のまま残るため）。
 const DAYS_PER_PAGE = 7;
 const ROW_STEP = 15;                       // サーバーは15分刻みで返すので取りこぼし防止に15分行
 const FALLBACK = { open: '09:00', close: '21:00' };
@@ -40,6 +41,9 @@ export function DateTimeStep({ storeId, menu, staffId, date, time, error, onSele
   const [fetchErr, setFetchErr] = useState<string | null>(null);   // 空き状況の取得エラー案内
   // キャッシュ: storeId|menuId|staffId|iso → {DayState, 取得時刻}（横スクロール/週送りの再取得を抑制）
   const cache = useRef<Map<string, { st: DayState; at: number }>>(new Map());
+
+  // 予約可能な28日分。日時ステップへ入るたびに算出し直す（日跨ぎの先頭ズレ防止）。
+  const ALL_DAYS = useMemo(() => nextDays(28), []);
 
   const maxPage = Math.ceil(ALL_DAYS.length / DAYS_PER_PAGE) - 1;
   const visibleDays = ALL_DAYS.slice(page * DAYS_PER_PAGE, page * DAYS_PER_PAGE + DAYS_PER_PAGE);

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 
 // LINE LIFF: index.html でSDKを読み込み済み。LIFF_ID未設定時はスキップ。
@@ -171,6 +171,9 @@ export function BookingFlow() {
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // 冪等キー: 同じ予約試行の再送信（通信断リトライ）でのみ再利用し、二重予約を防ぐ。
+  // 成功・別枠選び直し時はリセットして次回は新しいキーにする。
+  const idemKeyRef = useRef<string | null>(null);
   const [result, setResult] = useState<CreateBookingResult | null>(null);
   const [paid, setPaid] = useState(false);   // 事前決済の完了（自己申告）が済んだか
   const [restoredOpened, setRestoredOpened] = useState(false);   // 復元時、決済リンクを既に開いていたか
@@ -290,6 +293,8 @@ export function BookingFlow() {
     if (submitting) return;                       // 二重送信ガード
     if (!storeId || !menu || !date || !time) return;
     setSubmitting(true); setSubmitError(null);
+    // 同じ試行にはキーを固定（通信断リトライで二重予約にならないように）。無ければ生成。
+    if (!idemKeyRef.current) idemKeyRef.current = crypto.randomUUID();
     let r: CreateBookingResult;
     try {
       r = await createWebBooking({
@@ -300,14 +305,17 @@ export function BookingFlow() {
         guestEmail: customer.email.trim(),
         request: customer.request.trim() || undefined,
         isStudent: customer.isStudent,
+        idempotencyKey: idemKeyRef.current,
       });
     } catch {
+      // 通信エラーのみキーを保持（再送信で同じ予約として扱う）。ボタンを再度押せるようにする。
       setSubmitting(false);
       setSubmitError('通信に失敗しました。電波の良い場所で再度お試しください。');
       return;
     }
     setSubmitting(false);
     if (r.bookingId) {
+      idemKeyRef.current = null;   // 成立したのでキーを解放（次の予約は新しいキー）
       setResult(r);
       // 初回客で決済リンクがある場合は、お支払いが済むまで確定しない（事前決済ゲート）。
       // リンクが無い初回客・再来店客は従来どおり完了画面へ。
@@ -332,6 +340,8 @@ export function BookingFlow() {
       window.scrollTo(0, 0);
       return;
     }
+    // 別の枠を選び直す/入力を直す＝別の予約になるので、冪等キーはリセットする。
+    idemKeyRef.current = null;
     if (r.code === 'slot_taken' || r.code === 'closed') {
       setSubmitError(r.error ?? '選択した枠が予約できませんでした。別の日時をお選びください。');
       setTime(null); setStep('datetime');
@@ -688,16 +698,18 @@ function DoneView({ storeId, result, paid, menu, date, time, staffName, onReset 
     </>
   );
 
-  // Meta Pixel: 予約完了画面が表示されたら Schedule イベントを1回だけ送信（広告の予約コンバージョン計測）
+  // Meta Pixel: 予約が「確定」したときだけ Schedule イベントを送信（広告の予約コンバージョン計測）。
+  // 初回客の未払い（needsPay && !paid）は未確定なので発火しない（CVの水増しを防ぐ）。
   useEffect(() => {
+    if (needsPay && !paid) return;
     window.fbq?.('track', 'Schedule', {
       content_name: store.name,
       currency: 'JPY',
       value: result.depositAmount ?? 0,
     });
-    // 予約1件につき1回。result.bookingId が変わる＝別予約の完了時のみ再送信
+    // 予約1件につき1回。result.bookingId が変わる＝別予約の確定時のみ再送信
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result.bookingId]);
+  }, [result.bookingId, needsPay, paid]);
 
   // オンライン（Zoom）予約: 参加URLを画面に表示（メールに依存せず確実に届ける）
   if (result.zoomJoinUrl) {
