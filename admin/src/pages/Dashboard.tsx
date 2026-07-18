@@ -147,6 +147,14 @@ export function Dashboard() {
 
   const todayTotal = stats.todayByStore.tamashima + stats.todayByStore.kanamitsu;
 
+  const [showDemoInvite, setShowDemoInvite] = useState(
+    () => localStorage.getItem('demoInviteDismissed') !== '1',
+  );
+  const dismissDemoInvite = () => {
+    localStorage.setItem('demoInviteDismissed', '1');
+    setShowDemoInvite(false);
+  };
+
   return (
     <div className="page">
       <div className="page-head">
@@ -157,6 +165,26 @@ export function Dashboard() {
             : '今日のあなたの担当分をひと目で確認できます。（店舗全体は管理者が確認します）'}
         </p>
       </div>
+
+      {showDemoInvite && (
+        <div
+          className="card card-pad"
+          style={{
+            background: 'var(--accent-weak)', border: '1px solid var(--accent)',
+            marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          }}
+        >
+          <span style={{ fontSize: 20 }}>🎓</span>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>はじめての方へ — まずは練習モードで操作に慣れましょう</div>
+            <div style={{ fontSize: 12.5, color: 'var(--sub)', lineHeight: 1.6 }}>
+              本物そっくりの画面で、予約の入力・変更・キャンセルを何度でも練習できます。実際の予約には影響しません。
+            </div>
+          </div>
+          <Link to="/demo" className="btn btn-primary btn-sm" style={{ textDecoration: 'none' }}>練習モードを開く</Link>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={dismissDemoInvite}>あとで</button>
+        </div>
+      )}
 
       {loading ? (
         <div className="empty">読み込み中です…</div>

@@ -12,6 +12,7 @@ import { StaffOff } from './pages/StaffOff';
 import { StoreSettings } from './pages/StoreSettings';
 import { StaffPerformance } from './pages/StaffPerformance';
 import { UpdateHistory } from './pages/UpdateHistory';
+import { DemoMode } from './pages/DemoMode';
 import { AuthContext, useAuth } from './lib/auth';
 import type { Session } from '@supabase/supabase-js';
 
@@ -78,6 +79,12 @@ const ICON_PATHS = {
       <path d="M12 7v5l3 2" />
     </>
   ),
+  demo: (
+    <>
+      <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+      <path d="M6 12v5c3 3 9 3 12 0v-5" />
+    </>
+  ),
 } as const;
 
 type IconName = keyof typeof ICON_PATHS;
@@ -112,6 +119,7 @@ const NAV_ITEMS: { to: string; label: string; icon: IconName; title: string; adm
   { to: '/store-settings', label: '店舗設定', icon: 'settings', title: '営業時間・臨時休業を設定します（管理者のみ）', adminOnly: true },
   { to: '/performance', label: 'スタッフ成績・歩合', icon: 'chart', title: 'リピート率などの成績と、売上に対する歩合給を集計します' },
   { to: '/history', label: '更新履歴', icon: 'history', title: '予約・休みの登録/変更/削除の履歴（誰がいつ操作したか）を確認します' },
+  { to: '/demo', label: '練習モード', icon: 'demo', title: '本物そっくりの画面で操作を練習できます（保存されません）' },
 ];
 
 // 「使い方」ヘルプモーダル
@@ -343,6 +351,7 @@ export default function App() {
             <Route path="/store-settings" element={isAdmin ? <StoreSettings /> : <Navigate to="/" />} />
             <Route path="/performance" element={<StaffPerformance />} />
             <Route path="/history" element={<UpdateHistory />} />
+            <Route path="/demo" element={<DemoMode />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </Layout>
