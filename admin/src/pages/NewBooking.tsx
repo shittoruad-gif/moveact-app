@@ -569,6 +569,8 @@ export function NewBooking() {
       staff_id:           form.staffId || null,
       starts_at:          startsAt.toISOString(),
       ends_at:            endsAt.toISOString(),
+      buffer_before:      BUFFER_MINUTES,   // 前後の入れ替え時間15分を確保して受ける
+      buffer_after:       BUFFER_MINUTES,
       guest_name:         form.guestName.trim(),
       guest_phone:        form.guestPhone.trim(),
       guest_phone_norm:   form.guestPhone.replace(/\D/g, ''),
@@ -673,6 +675,8 @@ export function NewBooking() {
         staff_id:           form.staffId,
         starts_at:          item.startIso,
         ends_at:            item.endIso,
+        buffer_before:      BUFFER_MINUTES,   // 前後の入れ替え時間15分を確保して受ける
+        buffer_after:       BUFFER_MINUTES,
         guest_name:         form.guestName.trim(),
         guest_phone:        form.guestPhone.trim(),
         guest_phone_norm:   form.guestPhone.replace(/\D/g, ''),

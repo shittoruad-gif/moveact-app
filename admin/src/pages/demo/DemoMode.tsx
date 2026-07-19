@@ -13,6 +13,7 @@ import {
 const STEP = 30;
 const ROW_PX = 28;
 const PX_PER_MIN = ROW_PX / STEP;
+const BUFFER = 15;   // 前後の入れ替え時間（分）。本番と同じルールで練習する。
 
 type TabKey =
   | 'board' | 'newBooking' | 'bookings' | 'cancel' | 'lessons'
@@ -132,8 +133,12 @@ function BoardScreen({ onFlash }: { onFlash: (m: string) => void }) {
 
   const active = state.bookings.filter((b) => b.store === store && b.status !== 'cancelled');
   const offs = state.offs.filter((o) => o.store === store);
-  const overlaps = (staffId: string, start: number, mins: number, ignore?: string) =>
-    active.some((b) => b.id !== ignore && b.staffId === staffId && start < b.startMin + b.minutes && start + mins > b.startMin);
+  // 店舗キャパ=1＋前後の入れ替え時間15分: 店舗内に別の予約があり、±15分の枠が
+  // 重なる時間帯は担当を問わず不可（本番と同じルール）。第1引数staffIdは互換のため残す。
+  const overlaps = (_staffId: string, start: number, mins: number, ignore?: string) =>
+    active.some((b) => b.id !== ignore &&
+      start - BUFFER < b.startMin + b.minutes + BUFFER &&
+      start + mins + BUFFER > b.startMin - BUFFER);
 
   return (
     <>
@@ -220,7 +225,7 @@ function AddBookingModal({ store, ctx, hasOverlap, onClose, onAdd }: {
   const submit = () => {
     if (!name.trim()) { setError('お名前を入力してください（練習なので何でもOK）'); return; }
     if (ctx.startMin + menu.minutes > CLOSE_MIN) { setError('終了が営業時間（21:00）を超えます。'); return; }
-    if (hasOverlap(staffId, ctx.startMin, menu.minutes)) { setError('その時間帯はこの担当に別の予約があります。'); return; }
+    if (hasOverlap(staffId, ctx.startMin, menu.minutes)) { setError('この時間帯は店舗に別の予約があります（前後の入れ替え時間15分を含む）。同じ時間に受けられるのは店舗で1件までです。'); return; }
     onAdd({ store, staffId, startMin: ctx.startMin, minutes: menu.minutes, guestName: name.trim(), guestPhone: phone.trim(), menuId, price: menu.price, isFirstVisit: first });
   };
 
@@ -259,7 +264,7 @@ function EditBookingModal({ b, hasOverlap, onClose, onSave, onStatus }: {
   const times = useMemo(() => { const o: number[] = []; for (let m = OPEN_MIN; m < CLOSE_MIN; m += STEP) o.push(m); return o; }, []);
   const save = () => {
     if (startMin + minutes > CLOSE_MIN) { setError('終了が営業時間（21:00）を超えます。'); return; }
-    if (hasOverlap(startMin, minutes)) { setError('その時間帯はこの担当に別の予約があります。'); return; }
+    if (hasOverlap(startMin, minutes)) { setError('この時間帯は店舗に別の予約があります（前後の入れ替え時間15分を含む）。'); return; }
     onSave({ startMin, minutes });
   };
   return (
@@ -305,11 +310,15 @@ function NewBookingScreen({ onFlash, onDone }: { onFlash: (m: string) => void; o
   const staff = STAFF.filter((s) => s.store === store);
   const times = useMemo(() => { const o: number[] = []; for (let m = OPEN_MIN; m < CLOSE_MIN; m += STEP) o.push(m); return o; }, []);
   const dayBookings = state.bookings.filter((b) => b.store === store && b.staffId === staffId && b.status !== 'cancelled').sort((a, b) => a.startMin - b.startMin);
+  // 店舗キャパ=1＋入れ替え15分（本番と同じ）: 店舗内の別予約と±15分が重なる時間帯は不可
+  const storeBookings = state.bookings.filter((b) => b.store === store && b.status !== 'cancelled');
 
   const submit = () => {
     if (!name.trim()) { setError('お名前を入力してください'); return; }
     if (startMin + menu.minutes > CLOSE_MIN) { setError('終了が営業時間（21:00）を超えます。'); return; }
-    if (dayBookings.some((b) => startMin < b.startMin + b.minutes && startMin + menu.minutes > b.startMin)) { setError('この担当の同じ時間帯に予約があります。'); return; }
+    if (storeBookings.some((b) => startMin - BUFFER < b.startMin + b.minutes + BUFFER && startMin + menu.minutes + BUFFER > b.startMin - BUFFER)) {
+      setError('この時間帯は店舗に別の予約があります（前後の入れ替え時間15分を含む）。同じ時間に受けられるのは店舗で1件までです。'); return;
+    }
     addBooking({ store, staffId, startMin, minutes: menu.minutes, guestName: name.trim(), guestPhone: phone.trim(), menuId, price: menu.price, isFirstVisit: first });
     onFlash(`${name.trim()}さんの予約を登録しました（練習）`);
     setName(''); setPhone(''); setFirst(false);
