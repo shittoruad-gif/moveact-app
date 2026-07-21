@@ -262,15 +262,16 @@ function DemoUsageCard({ isAdmin }: { isAdmin: boolean }) {
     let cancelled = false;
     (async () => {
       setLoading(true); setError(null);
-      const [logs, roster] = await Promise.all([
+      const [logs, people] = await Promise.all([
         supabase.from('demo_usage_log').select('user_id, opened_at').order('opened_at', { ascending: false }).limit(5000),
-        supabase.from('public_staff_roster').select('staff_id, full_name'),
+        // 名前は profiles から引く（店舗未配属の管理者も名前が出るように）
+        supabase.from('profiles').select('id, full_name').in('role', ['staff', 'admin']),
       ]);
       if (cancelled) return;
-      if (logs.error || roster.error) { setError('利用状況の取得に失敗しました。'); setRows([]); setLoading(false); return; }
+      if (logs.error || people.error) { setError('利用状況の取得に失敗しました。'); setRows([]); setLoading(false); return; }
       const nameById = new Map<string, string>();
-      for (const r of ((roster.data as { staff_id: string; full_name: string }[]) ?? [])) {
-        if (!nameById.has(r.staff_id)) nameById.set(r.staff_id, r.full_name);
+      for (const r of ((people.data as { id: string; full_name: string }[]) ?? [])) {
+        if (!nameById.has(r.id)) nameById.set(r.id, r.full_name);
       }
       const agg = new Map<string, { count: number; last: string }>();
       for (const l of ((logs.data as { user_id: string; opened_at: string }[]) ?? [])) {
