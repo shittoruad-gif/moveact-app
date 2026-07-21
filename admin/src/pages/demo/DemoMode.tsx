@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   DemoProvider, useDemo, STAFF, MENUS, STORES, STORE_NAMES, OPEN_MIN, CLOSE_MIN,
   minToHHMM, DEMO_DATE_LABEL,
   type StoreId, type DemoBooking, type OffType,
 } from './store';
+import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../lib/auth';
 
 // ─────────────────────────────────────────────────────────────
 // 練習モード（デモ）— 管理画面の全機能を練習できる自己完結アプリ
@@ -44,9 +46,22 @@ export function DemoMode() {
 
 function DemoInner() {
   const { reset } = useDemo();
+  const { userId } = useAuth();
   const [tab, setTab] = useState<TabKey>('board');
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast((t) => (t === m ? null : t)), 2600); };
+
+  // 練習モードを開いた記録を1回だけ残す（利用状況の把握用・練習データは保存しない）。
+  // 失敗しても練習は止めない（テレメトリのため握りつぶす）。
+  const loggedRef = useRef(false);
+  useEffect(() => {
+    if (loggedRef.current || !userId) return;
+    loggedRef.current = true;
+    supabase.from('demo_usage_log').insert({ user_id: userId }).then(
+      () => {},
+      (e) => console.warn('demo usage log failed:', e?.message),
+    );
+  }, [userId]);
 
   const handleReset = () => {
     if (!window.confirm('練習の内容をすべて消して、最初の状態に戻します。よろしいですか？')) return;

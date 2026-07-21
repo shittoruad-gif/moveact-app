@@ -241,6 +241,86 @@ export function StaffPerformance() {
           </div>
         </>
       )}
+
+      {/* 練習モードの利用状況 */}
+      <DemoUsageCard isAdmin={isAdmin} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// 練習モード（デモ）の利用状況
+//   demo_usage_log を集計。管理者は全員分、一般スタッフは自分の分（RLSで自動的に絞られる）。
+// ─────────────────────────────────────────────────────────────
+interface UsageRow { name: string; count: number; last: string | null }
+function DemoUsageCard({ isAdmin }: { isAdmin: boolean }) {
+  const [rows, setRows] = useState<UsageRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setError(null);
+      const [logs, roster] = await Promise.all([
+        supabase.from('demo_usage_log').select('user_id, opened_at').order('opened_at', { ascending: false }).limit(5000),
+        supabase.from('public_staff_roster').select('staff_id, full_name'),
+      ]);
+      if (cancelled) return;
+      if (logs.error || roster.error) { setError('利用状況の取得に失敗しました。'); setRows([]); setLoading(false); return; }
+      const nameById = new Map<string, string>();
+      for (const r of ((roster.data as { staff_id: string; full_name: string }[]) ?? [])) {
+        if (!nameById.has(r.staff_id)) nameById.set(r.staff_id, r.full_name);
+      }
+      const agg = new Map<string, { count: number; last: string }>();
+      for (const l of ((logs.data as { user_id: string; opened_at: string }[]) ?? [])) {
+        const cur = agg.get(l.user_id);
+        if (cur) cur.count += 1; else agg.set(l.user_id, { count: 1, last: l.opened_at });
+      }
+      const out: UsageRow[] = [...agg.entries()]
+        .map(([id, v]) => ({ name: nameById.get(id) ?? '（不明なスタッフ）', count: v.count, last: v.last }))
+        .sort((a, b) => b.count - a.count);
+      setRows(out);
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const fmt = (iso: string | null) => {
+    if (!iso) return '—';
+    const j = new Date(new Date(iso).getTime() + 9 * 3600_000);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${j.getUTCMonth() + 1}/${j.getUTCDate()} ${p(j.getUTCHours())}:${p(j.getUTCMinutes())}`;
+  };
+
+  return (
+    <div className="card card-pad" style={{ marginTop: 20 }}>
+      <div style={sectionTitle}>練習モードの利用状況</div>
+      <p style={noteStyle}>
+        練習モードを開いた回数と最後に使った日時です。{isAdmin ? '全スタッフ分を表示しています。' : '（あなたの分のみ表示しています）'}
+      </p>
+      {loading ? (
+        <div className="empty">読み込み中です…</div>
+      ) : error ? (
+        <div className="empty" style={{ color: 'var(--red)' }}>{error}</div>
+      ) : rows.length === 0 ? (
+        <div className="empty">まだ練習モードの利用記録はありません。</div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={tableStyle}>
+            <thead><tr><th style={th}>スタッフ</th><th style={thR}>練習した回数</th><th style={thR}>最後に使った日時</th></tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.name}>
+                  <td style={td}>{r.name}</td>
+                  <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{r.count}回</td>
+                  <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmt(r.last)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
