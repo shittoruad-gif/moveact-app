@@ -15,6 +15,7 @@ import { UpdateHistory } from './pages/UpdateHistory';
 import { DemoMode } from './pages/demo/DemoMode';
 import { BookingLinks } from './pages/BookingLinks';
 import { MenuManager } from './pages/MenuManager';
+import { StaffAccounts } from './pages/StaffAccounts';
 import { AuthContext, useAuth } from './lib/auth';
 import type { Session } from '@supabase/supabase-js';
 
@@ -129,6 +130,7 @@ const NAV_ITEMS: { to: string; label: string; icon: IconName; title: string; adm
   { to: '/history', label: '更新履歴', icon: 'history', title: '予約・休みの登録/変更/削除の履歴（誰がいつ操作したか）を確認します' },
   { to: '/booking-links', label: '予約リンク', icon: 'link', title: 'スタッフ別・店舗別のネット予約URLを確認してコピーできます' },
   { to: '/menus', label: 'メニュー管理', icon: 'settings', title: 'メニューの追加・編集と、メニューごとの予約URL発行（管理者のみ）', adminOnly: true },
+  { to: '/staff-accounts', label: 'スタッフのログイン', icon: 'staffOff', title: 'スタッフのログイン状況の確認とパスワード再設定（管理者のみ）', adminOnly: true },
   { to: '/demo', label: '練習モード', icon: 'demo', title: '本物そっくりの画面で操作を練習できます（保存されません）' },
 ];
 
@@ -363,6 +365,7 @@ export default function App() {
             <Route path="/history" element={<UpdateHistory />} />
             <Route path="/booking-links" element={<BookingLinks />} />
             <Route path="/menus" element={isAdmin ? <MenuManager /> : <Navigate to="/" />} />
+            <Route path="/staff-accounts" element={isAdmin ? <StaffAccounts /> : <Navigate to="/" />} />
             <Route path="/demo" element={<DemoMode />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
