@@ -285,7 +285,9 @@ export function BookingFlow() {
   const goBack = () => { const i = flow.indexOf(step); if (i > 0) { setStep(flow[i - 1]); window.scrollTo(0, 0); } };
 
   const handleStore = (s: StoreId) => {
-    setStoreId(s); setMenu(null); setDate(null); setTime(null);
+    setStoreId(s); setDate(null); setTime(null);
+    // メニューURL（/menu/{slug}）ならそのメニューを維持、それ以外は選び直し
+    setMenu(pageData.presetMenu ?? null);
     setStaffPick(pageData.staff ? pageData.staff.id : undefined);   // 店舗が変わると指名は選び直し
   };
   const handleMenu = (m: Menu) => { setMenu(m); setTime(null); };
