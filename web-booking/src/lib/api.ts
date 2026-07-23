@@ -53,6 +53,7 @@ export interface PageData {
   stores: { id: StoreId; name: string }[];
   menusByStore: Record<string, Menu[]>;
   staffByStore?: Record<string, RosterStaff[]>;   // 店舗別スタッフ一覧（フロー内の指名選択用）
+  presetMenu?: Menu | null;   // メニューURL(/menu/{slug})で来た場合の対象メニュー
 }
 
 export interface Slot {
@@ -120,8 +121,8 @@ async function postJson<T>(fn: string, body: unknown): Promise<T> {
   return data as T;
 }
 
-export function getBookingPageData(slug?: string): Promise<PageData> {
-  return postJson<PageData>('get-booking-page-data', { slug: slug ?? '' });
+export function getBookingPageData(slug?: string, menuSlug?: string): Promise<PageData> {
+  return postJson<PageData>('get-booking-page-data', { slug: slug ?? '', menuSlug: menuSlug ?? '' });
 }
 
 export async function getAvailableSlots(p: {

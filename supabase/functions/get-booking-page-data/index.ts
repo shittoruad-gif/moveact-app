@@ -29,14 +29,40 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   try {
     let slug = '';
+    let menuSlug = '';
     if (req.method === 'POST') {
       const b = await req.json().catch(() => ({}));
       slug = (b.slug ?? '').toString().trim();
+      menuSlug = (b.menuSlug ?? '').toString().trim();
     } else {
-      slug = new URL(req.url).searchParams.get('slug')?.trim() ?? '';
+      const u = new URL(req.url);
+      slug = u.searchParams.get('slug')?.trim() ?? '';
+      menuSlug = u.searchParams.get('menuSlug')?.trim() ?? '';
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
+
+    // メニュー個別URL（/menu/{slug}）: そのメニューだけを予約対象にする。
+    // 非公開(is_unlisted)メニューもこの経路でのみ解決できる（スレッズ限定など）。
+    let presetMenu: Record<string, unknown> | null = null;
+    let presetMenuStores: string[] | null = null;
+    if (menuSlug) {
+      const { data: pm } = await supabase
+        .from('treatment_menus').select('*')
+        .eq('booking_slug', menuSlug).eq('is_active', true).maybeSingle();
+      if (pm) {
+        const { data: pmStores } = await supabase
+          .from('store_treatment_menus')
+          .select('store_id')
+          .eq('treatment_menu_id', pm.id).eq('is_available', true);
+        presetMenuStores = (pmStores ?? []).map((r: { store_id: string }) => r.store_id);
+        presetMenu = {
+          id: pm.id, name: pm.name, durationMinutes: pm.duration_minutes, price: pm.price,
+          treatmentType: pm.treatment_type, description: pm.description,
+          imageUrl: pm.image_url ?? null, requiredStaffSlug: pm.required_staff_slug ?? null,
+        };
+      }
+    }
 
     // 1) slug → スタッフ
     let staff: { id: string; name: string; slug: string; storeIds: string[] } | null = null;
@@ -57,8 +83,11 @@ serve(async (req) => {
       }
     }
 
-    // 2) 対象店舗（staffありなら配属店舗、なければ全店）
-    const targetStores = staff && staff.storeIds.length > 0 ? staff.storeIds : ALL_STORES;
+    // 2) 対象店舗:
+    //    メニューURLなら そのメニューを提供する店舗、staffありなら配属店舗、なければ全店
+    const targetStores = (presetMenu && presetMenuStores && presetMenuStores.length > 0)
+      ? presetMenuStores
+      : (staff && staff.storeIds.length > 0 ? staff.storeIds : ALL_STORES);
     const stores = targetStores.map((id) => ({ id, name: STORE_NAMES[id] ?? id }));
 
     // 3) 店舗別メニュー（store_treatment_menus × treatment_menus, 有効のみ）
@@ -70,12 +99,14 @@ serve(async (req) => {
 
     const menuIds = Array.from(new Set((stm ?? []).map((r: { treatment_menu_id: string }) => r.treatment_menu_id)));
     // select('*') にして image_url 列があれば自動で拾う（後日 image_url を追加しても改修不要）
+    // 通常の一覧では is_unlisted（スレッズ限定など）を除外。専用URLからのみ予約できる。
     const { data: menus } = menuIds.length
       ? await supabase
           .from('treatment_menus')
           .select('*')
           .in('id', menuIds)
           .eq('is_active', true)
+          .eq('is_unlisted', false)
           .order('sort_order', { ascending: true })
       : { data: [] };
 
@@ -104,6 +135,11 @@ serve(async (req) => {
       for (const id of targetStores) {
         if (availByStore.get(id)?.has(m.id)) menusByStore[id].push(payload);
       }
+    }
+
+    // メニューURLの場合は、そのメニューだけを各対象店舗に表示する（他メニューは出さない）。
+    if (presetMenu) {
+      for (const id of targetStores) menusByStore[id] = [presetMenu];
     }
 
     // 4) 店舗別スタッフ一覧（フロー内の指名選択用）。public_staff_roster は "Anyone can read"。
@@ -204,7 +240,7 @@ serve(async (req) => {
       }
     }
 
-    return json({ staff, stores, menusByStore, staffByStore });
+    return json({ staff, stores, menusByStore, staffByStore, presetMenu });
   } catch (e) {
     console.error('get-booking-page-data error:', (e as Error).message);
     return json({ error: 'Internal error' }, 500);

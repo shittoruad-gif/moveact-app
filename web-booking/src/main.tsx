@@ -14,7 +14,9 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/cancel/:token" element={<CancelPage />} />
         {/* LINEログインのhttps中継（slug より先に） */}
         <Route path="/line-callback" element={<LineCallback />} />
-        {/* / = おまかせ、/:slug = 担当者指名 */}
+        {/* /menu/:menuSlug = メニュー個別URL（そのメニューだけ表示） */}
+        <Route path="/menu/:menuSlug" element={<BookingFlow />} />
+        {/* / = おまかせ、/:slug = 担当者指名 or 店舗別 */}
         <Route path="/" element={<BookingFlow />} />
         <Route path="/:slug" element={<BookingFlow />} />
       </Routes>

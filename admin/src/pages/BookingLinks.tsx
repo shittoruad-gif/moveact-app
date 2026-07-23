@@ -19,11 +19,13 @@ interface StaffRow {
   role: string;
 }
 interface StoreLink { staff_id: string; store_id: string; }
+interface MenuRow { id: string; name: string; booking_slug: string | null; is_unlisted: boolean; sort_order: number | null; }
 
 export function BookingLinks() {
   const { userId } = useAuth();
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [stores, setStores] = useState<StoreLink[]>([]);
+  const [menus, setMenus] = useState<MenuRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -33,22 +35,29 @@ export function BookingLinks() {
     (async () => {
       setLoading(true);
       setError(null);
-      const [p, ss] = await Promise.all([
+      const [p, ss, mm] = await Promise.all([
         supabase.from('profiles').select('id, full_name, booking_slug, role').in('role', ['staff', 'admin']),
         supabase.from('staff_stores').select('staff_id, store_id').eq('is_active', true),
+        supabase.from('treatment_menus').select('id, name, booking_slug, is_unlisted, sort_order').eq('is_active', true).order('sort_order'),
       ]);
       if (cancelled) return;
-      if (p.error || ss.error) {
+      if (p.error || ss.error || mm.error) {
         setError('予約リンクの読み込みに失敗しました。時間をおいて再度お試しください。');
-        setStaff([]); setStores([]);
+        setStaff([]); setStores([]); setMenus([]);
       } else {
         setStaff((p.data as StaffRow[]) ?? []);
         setStores((ss.data as StoreLink[]) ?? []);
+        setMenus((mm.data as MenuRow[]) ?? []);
       }
       setLoading(false);
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // 公開メニュー（一般URLでも見える）と限定メニュー（専用URLのみ）に分ける
+  const menusWithSlug = useMemo(() => menus.filter((m) => m.booking_slug), [menus]);
+  const publicMenus = useMemo(() => menusWithSlug.filter((m) => !m.is_unlisted), [menusWithSlug]);
+  const unlistedMenus = useMemo(() => menusWithSlug.filter((m) => m.is_unlisted), [menusWithSlug]);
 
   // slug を持つスタッフのみ・slug重複を除外・氏名順
   const staffWithSlug = useMemo(() => {
@@ -140,6 +149,38 @@ export function BookingLinks() {
               ))
             )}
           </div>
+
+          {/* メニュー別 */}
+          <div className="card card-pad" style={{ marginBottom: 16 }}>
+            <h3 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 600 }}>メニュー別の予約リンク</h3>
+            <p className="page-help" style={{ marginTop: 0 }}>そのメニューだけを選んで予約できるURLです。「整体だけ予約してほしい」お客様に、このリンクを送れます。</p>
+            {publicMenus.length === 0 ? (
+              <div className="empty">予約リンクを持つメニューがありません。</div>
+            ) : (
+              publicMenus.map((m) => (
+                <LinkRow key={m.id} label={m.name} url={`${BOOKING_BASE}/menu/${m.booking_slug}`} k={`menu-${m.id}`} />
+              ))
+            )}
+          </div>
+
+          {/* スレッズ限定など非公開メニュー */}
+          {unlistedMenus.length > 0 && (
+            <div className="card card-pad" style={{ marginBottom: 16, border: '1px solid var(--accent)' }}>
+              <h3 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 600 }}>限定メニューの予約リンク（一般には非公開）</h3>
+              <p className="page-help" style={{ marginTop: 0 }}>
+                これらのメニューは<strong>通常の予約ページには表示されません</strong>。この専用リンクを受け取った人だけが予約できます（スレッズ限定など）。
+              </p>
+              {unlistedMenus.map((m) => (
+                <LinkRow
+                  key={m.id}
+                  label={m.name}
+                  sub="限定・専用URLのみ"
+                  url={`${BOOKING_BASE}/menu/${m.booking_slug}`}
+                  k={`umenu-${m.id}`}
+                />
+              ))}
+            </div>
+          )}
 
           {/* 店舗別・全体 */}
           <div className="card card-pad">

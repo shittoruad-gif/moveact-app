@@ -146,7 +146,7 @@ function downloadBookingIcs(p: {
 }
 
 export function BookingFlow() {
-  const { slug } = useParams();
+  const { slug, menuSlug } = useParams();
   // URL の slug は「店舗別URL」か「担当者別URL(booking_slug)」のいずれか。
   //   店舗別 → その店舗に固定（店舗選択をスキップ）。slugなし → 従来どおり両店から選択。
   //   金光店のURLは公式サイトに合わせて /konkou（内部ID kanamitsu へマッピング）。
@@ -185,7 +185,7 @@ export function BookingFlow() {
     setStoreId(null); setMenu(null); setStaffPick(undefined); setDate(null); setTime(null);
     setCustomer({ name: '', phone: '', email: '', request: '', consent: false, isStudent: false });
     setResult(null); setSubmitError(null); setPaid(false); setRestoredOpened(false);
-    getBookingPageData(staffSlug)
+    getBookingPageData(staffSlug, menuSlug)
       .then((d) => {
         if (cancelled) return;
         // 店舗別URLの場合は対象店舗だけに絞る（店舗選択を出さず自動確定）
@@ -193,10 +193,12 @@ export function BookingFlow() {
         setPageData(data);
         if (data.stores.length === 1) setStoreId((prev) => prev ?? data.stores[0].id);   // 復元済みの店舗は上書きしない
         if (d.staff) setStaffPick(d.staff.id);   // 担当者別URLで来た場合は指名を初期選択
+        // メニューURL（/menu/{slug}）で来た場合はそのメニューを初期選択（他メニューは表示されない）
+        if (d.presetMenu) setMenu((prev) => prev ?? d.presetMenu!);
       })
       .catch(() => { if (!cancelled) setLoadError(true); });
     return () => { cancelled = true; };
-  }, [slug]);
+  }, [slug, menuSlug]);
 
   // タブ破棄・リロード後の復元（マウント時に1回だけ）。
   // 未決済の仮押さえがストレージに残っていれば、決済ステップへ直行して
