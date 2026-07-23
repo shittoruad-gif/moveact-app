@@ -16,6 +16,7 @@ import { DemoMode } from './pages/demo/DemoMode';
 import { BookingLinks } from './pages/BookingLinks';
 import { MenuManager } from './pages/MenuManager';
 import { StaffAccounts } from './pages/StaffAccounts';
+import { ResetPassword } from './pages/ResetPassword';
 import { AuthContext, useAuth } from './lib/auth';
 import type { Session } from '@supabase/supabase-js';
 
@@ -330,6 +331,12 @@ export default function App() {
       });
     return () => { cancelled = true; };
   }, [session]);
+
+  // パスワード再設定リンク(/reset-password)は、ログイン状態に関わらず最優先で表示。
+  // （メールのリンクから来たスタッフは未ログインのため、通常のログイン画面を出さない）
+  if (window.location.pathname === '/reset-password') {
+    return <ResetPassword />;
+  }
 
   if (loading) {
     return <div className="app-loading">読み込んでいます…</div>;
