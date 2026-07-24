@@ -12,6 +12,18 @@ import { getBookingPageData, createWebBooking, confirmWebBooking, STORE_INFO, fo
 import { StoreMenuStep } from './components/StoreMenuStep';
 import { DateTimeStep } from './components/DateTimeStep';
 import { CustomerStep, type CustomerInfo } from './components/CustomerStep';
+import { loadRememberedContact, saveRememberedContact, clearRememberedContact } from './lib/rememberCustomer';
+import { getLineIdToken } from './lib/liff';
+import { fetchLineContact, saveLineContact } from './lib/api';
+
+// 入力欄の初期値。連絡先だけは前回の記憶から復元し、それ以外は毎回まっさらにする。
+function freshCustomer(): CustomerInfo {
+  const r = loadRememberedContact();
+  return {
+    name: r?.name ?? '', phone: r?.phone ?? '', email: r?.email ?? '',
+    request: '', consent: false, isStudent: false,
+  };
+}
 import { ConfirmStep } from './components/ConfirmStep';
 import { StaffStep } from './components/StaffStep';
 import { StepIndicator } from './components/StepIndicator';
@@ -167,7 +179,14 @@ export function BookingFlow() {
   const [staffPick, setStaffPick] = useState<string | null | undefined>(undefined); // undefined=未選択, null=おまかせ, string=指名
   const [date, setDate] = useState<string | null>(null);
   const [time, setTime] = useState<string | null>(null);
-  const [customer, setCustomer] = useState<CustomerInfo>({ name: '', phone: '', email: '', request: '', consent: false, isStudent: false });
+  // 前回この端末で予約した方は連絡先を自動入力する（ご要望・同意・学割は毎回入力し直し）
+  const [customer, setCustomer] = useState<CustomerInfo>(() => freshCustomer());
+  // 自動入力で埋めたかどうか（「別の方が予約する」の案内を出すため）
+  const [contactPrefilled, setContactPrefilled] = useState<boolean>(() => loadRememberedContact() !== null);
+  // LINEで本人確認できた場合のIDトークン（予約成立時の保存に使う）
+  const lineIdTokenRef = useRef<string | null>(null);
+  // LINEの情報から自動入力したか（案内文の出し分け）
+  const [linePrefilled, setLinePrefilled] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -178,12 +197,31 @@ export function BookingFlow() {
   const [paid, setPaid] = useState(false);   // 事前決済の完了（自己申告）が済んだか
   const [restoredOpened, setRestoredOpened] = useState(false);   // 復元時、決済リンクを既に開いていたか
 
+  // LINE（LIFF）から開かれた場合は、本人の連絡先を取得して自動入力する。
+  // LINE外・未設定・失敗時はすべて何もしない（①の端末記憶がそのまま効く）。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const token = await getLineIdToken();
+      if (cancelled || !token) return;
+      lineIdTokenRef.current = token;
+      const c = await fetchLineContact(token);
+      if (cancelled || !c) return;
+      if (!c.name && !c.phone && !c.email) return;
+      setCustomer((prev) => ({ ...prev, name: c.name, phone: c.phone, email: c.email }));
+      setContactPrefilled(true);
+      setLinePrefilled(true);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // 初期データ + slug変更時に状態を完全リセット
   useEffect(() => {
     let cancelled = false;
     setPageData(null); setLoadError(false); setStep('menu');
     setStoreId(null); setMenu(null); setStaffPick(undefined); setDate(null); setTime(null);
-    setCustomer({ name: '', phone: '', email: '', request: '', consent: false, isStudent: false });
+    setCustomer(freshCustomer());
+    setContactPrefilled(loadRememberedContact() !== null);
     setResult(null); setSubmitError(null); setPaid(false); setRestoredOpened(false);
     getBookingPageData(staffSlug, menuSlug)
       .then((d) => {
@@ -320,6 +358,14 @@ export function BookingFlow() {
     setSubmitting(false);
     if (r.bookingId) {
       idemKeyRef.current = null;   // 成立したのでキーを解放（次の予約は新しいキー）
+      // 次回の予約で自動入力できるよう、連絡先だけをこの端末に記憶する
+      saveRememberedContact({ name: customer.name, phone: customer.phone, email: customer.email });
+      // LINEから予約された方は、LINEアカウントにも紐づけて保存（別端末でも自動入力される）
+      if (lineIdTokenRef.current) {
+        void saveLineContact(lineIdTokenRef.current, {
+          name: customer.name.trim(), phone: customer.phone.trim(), email: customer.email.trim(),
+        });
+      }
       setResult(r);
       // 初回客で決済リンクがある場合は、お支払いが済むまで確定しない（事前決済ゲート）。
       // リンクが無い初回客・再来店客は従来どおり完了画面へ。
@@ -457,6 +503,14 @@ export function BookingFlow() {
         <CustomerStep
           customer={customer}
           setCustomer={setCustomer}
+          contactPrefilled={contactPrefilled}
+          prefillSource={linePrefilled ? 'line' : 'device'}
+          onUseAnotherPerson={() => {
+            clearRememberedContact();
+            setCustomer({ name: '', phone: '', email: '', request: '', consent: false, isStudent: false });
+            setContactPrefilled(false);
+            setLinePrefilled(false);
+          }}
           summary={storeId && menu && date && time ? {
             storeName: STORE_INFO[storeId].name,
             menuName: menu.name,

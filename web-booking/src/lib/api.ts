@@ -270,3 +270,27 @@ export function nextDays(count: number): DayOption[] {
 export function formatYen(n: number): string {
   return `¥${n.toLocaleString('ja-JP')}`;
 }
+
+// ---- LINE連携（連絡先の自動入力） ----
+// いずれも失敗しても予約フローを止めない（黙って諦める）方針。
+
+export interface LineContact { name: string; phone: string; email: string; }
+
+/** LINE本人の連絡先を取得。未登録・未連携・失敗時は null。 */
+export async function fetchLineContact(idToken: string): Promise<LineContact | null> {
+  try {
+    const r = await postJson<{ contact?: LineContact | null }>('line-booking-contact', { action: 'get', idToken });
+    return r.contact ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 予約成立時に、次回の自動入力用としてLINE本人の連絡先を保存。 */
+export async function saveLineContact(idToken: string, contact: LineContact): Promise<void> {
+  try {
+    await postJson('line-booking-contact', { action: 'save', idToken, contact });
+  } catch {
+    /* 保存できなくても予約は成立している。次回自動入力されないだけ。 */
+  }
+}

@@ -24,9 +24,12 @@ interface Props {
   setCustomer: (c: CustomerInfo) => void;
   isFirstVisitHint?: boolean;
   summary?: PickedSummary;   // 選択済み内容のミニ表示（入力中に日時を確認できるように）
+  contactPrefilled?: boolean;                  // 前回のご入力から自動で埋めたか
+  prefillSource?: 'device' | 'line';           // 自動入力の出どころ（案内文の出し分け）
+  onUseAnotherPerson?: () => void;             // 「別の方が予約する」で記憶を消して空にする
 }
 
-export function CustomerStep({ customer, setCustomer, summary }: Props) {
+export function CustomerStep({ customer, setCustomer, summary, contactPrefilled, prefillSource, onUseAnotherPerson }: Props) {
   const up = (patch: Partial<CustomerInfo>) => setCustomer({ ...customer, ...patch });
   const emailInvalid = customer.email.trim().length > 0 && !isValidEmail(customer.email);
   const [showPolicy, setShowPolicy] = useState(false);
@@ -40,6 +43,21 @@ export function CustomerStep({ customer, setCustomer, summary }: Props) {
         <div className="picked-summary" aria-label="選択中のご予約内容">
           <span className="ps-main">{summary.dateLabel}　{summary.time}</span>
           <span className="ps-sub">{summary.menuName} ／ {summary.staffLabel} ／ {summary.storeName}</span>
+        </div>
+      )}
+
+      {contactPrefilled && (
+        <div className="prefill-note" role="status">
+          <span>
+            {prefillSource === 'line'
+              ? 'LINEのご登録内容から自動で入力しました。このままで進めます。'
+              : '前回ご入力いただいた内容を表示しています。このままで進めます。'}
+          </span>
+          {onUseAnotherPerson && (
+            <button type="button" className="prefill-clear" onClick={onUseAnotherPerson}>
+              別の方が予約する（入力を消す）
+            </button>
+          )}
         </div>
       )}
 
