@@ -17,6 +17,7 @@ import { BookingLinks } from './pages/BookingLinks';
 import { MenuManager } from './pages/MenuManager';
 import { StaffAccounts } from './pages/StaffAccounts';
 import { ResetPassword } from './pages/ResetPassword';
+import { Customers } from './pages/Customers';
 import { AuthContext, useAuth } from './lib/auth';
 import type { Session } from '@supabase/supabase-js';
 
@@ -123,6 +124,7 @@ const NAV_ITEMS: { to: string; label: string; icon: IconName; title: string; adm
   { to: '/', label: 'ダッシュボード', icon: 'dashboard', title: '本日の予約件数など店舗の概況を確認します' },
   { to: '/bookings', label: '予約管理', icon: 'bookings', title: '予約を一覧で検索・確認します' },
   { to: '/new-booking', label: '手動予約入力', icon: 'newBooking', title: '電話や店頭で受けた予約を登録します' },
+  { to: '/customers', label: 'クライアント一覧', icon: 'bookings', title: '予約したお客様の一覧。検索してそのまま予約を入れられます' },
   { to: '/cancellations', label: '当日キャンセル', icon: 'cancel', title: '当日のキャンセル・無断キャンセルを記録します' },
   { to: '/lessons', label: 'グループレッスン', icon: 'group', title: 'グループレッスンの枠と参加者を管理します' },
   { to: '/staff-off', label: 'スタッフ休み', icon: 'staffOff', title: 'スタッフの休みを登録します' },
@@ -363,6 +365,7 @@ export default function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/bookings" element={<Bookings />} />
             <Route path="/new-booking" element={<NewBooking />} />
+            <Route path="/customers" element={<Customers />} />
             <Route path="/cancellations" element={<Cancellations />} />
             <Route path="/lessons" element={<GroupLessons />} />
             <Route path="/staff-off" element={<StaffOff />} />

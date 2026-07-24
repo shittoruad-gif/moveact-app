@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { CustomerSearch } from '../components/CustomerSearch';
 
 // 手動予約入力
 // ・電話・店頭で受けた予約を登録する（単発）。右パネルにその日の予約状況を表示
@@ -265,6 +266,13 @@ function formFromParams(params: URLSearchParams): typeof INIT_FORM {
   if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) form.date = date;
   const time = params.get('time');
   if (time && /^([01]\d|2[0-3]):[0-5]\d$/.test(time)) form.time = time;
+  // クライアント一覧の「予約を入れる」から遷移した場合のお客様情報プリフィル
+  const gname = params.get('name');
+  if (gname) form.guestName = gname;
+  const gphone = params.get('phone');
+  if (gphone) form.guestPhone = gphone;
+  const gemail = params.get('email');
+  if (gemail) form.guestEmail = gemail;
   return form;
 }
 
@@ -325,6 +333,14 @@ export function NewBooking() {
       setMasterLoaded(true);
     });
   }, []);
+
+  // クライアント検索用: メニューID→名前 / スタッフID→氏名 のマップ（来店履歴の表示に使う）
+  const menuNameMap = useMemo(() => new Map(menuList.map(m => [m.id, m.name])), [menuList]);
+  const staffNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of roster) if (!map.has(r.staff_id)) map.set(r.staff_id, r.full_name);
+    return map;
+  }, [roster]);
 
   // 選択中メニューの施術種別を担当できるスタッフ集合（メニュー未選択なら絞らない=null）
   const skilledForMenu = useMemo(() => {
@@ -1255,6 +1271,20 @@ export function NewBooking() {
                   </p>
                 )}
               </div>
+
+              {/* クライアント検索: 選択でお名前・電話・メールを自動入力し、来店履歴を表示 */}
+              <CustomerSearch
+                menuNames={menuNameMap}
+                staffNames={staffNameMap}
+                onPick={(c) => {
+                  setForm(f => ({
+                    ...f,
+                    guestName: c.name,
+                    guestPhone: c.phone ?? f.guestPhone,
+                    guestEmail: c.email ?? f.guestEmail,
+                  }));
+                }}
+              />
 
               <div className="field">
                 <label className="field-label" htmlFor="nb-name">お名前 <RequiredBadge /></label>
